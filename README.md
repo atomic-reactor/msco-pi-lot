@@ -59,6 +59,12 @@ Only `MICROSOFT_COPILOT_ACCESS_TOKEN` is required. Cookie-based settings remain 
 - Supports local tool use through a prompt-mediated tool loop
 - Uses Copilot server config to size prompts conservatively against the live `maxTextMessageLength`
 
+## Known Issues
+
+- This is still a basic integration. It gets Microsoft Copilot working inside `pi`, but it is not yet on par with a full agentic coding agent.
+- Microsoft Copilot will sometimes fail to respond at all. In those cases the request may stall or end without a useful answer, and retrying is often the only workaround.
+- Microsoft Copilot will sometimes behave as if it is running in a browser context. When that happens it may try to inspect browser tabs or page state that do not exist in `pi`, which can cause the response to stall or go off track.
+
 ## Development
 
 Install dependencies:
