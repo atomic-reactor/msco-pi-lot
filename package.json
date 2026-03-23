@@ -17,8 +17,12 @@
   "keywords": [
     "pi",
     "pi-extension",
+    "pi-package",
     "microsoft-copilot",
-    "coding-agent"
+    "copilot-provider",
+    "coding-agent",
+    "msco",
+    "pi-plugin"
   ],
   "repository": {
     "type": "git",
