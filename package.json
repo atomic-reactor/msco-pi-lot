@@ -1,0 +1,39 @@
+{
+  "name": "msco-pi-lot",
+  "version": "0.1.0",
+  "description": "Microsoft Copilot provider extension for pi coding agent.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": "./src/index.ts",
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "scripts": {
+    "test": "vitest --run"
+  },
+  "keywords": [
+    "pi",
+    "pi-extension",
+    "microsoft-copilot",
+    "coding-agent"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:atomic-reactor/msco-pi-lot.git"
+  },
+  "dependencies": {
+    "dotenv": "^16.6.1",
+    "ws": "^8.18.3"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.5.2",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}
