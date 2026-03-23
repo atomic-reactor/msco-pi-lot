@@ -53,6 +53,7 @@ jobs:
 
   test:
     name: Run tests matrix
+    needs: build
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
