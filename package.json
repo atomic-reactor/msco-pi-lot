@@ -1,5 +1,5 @@
 {
-  "name": "msco-pi-lot",
+  "name": "@atomic-ai/msco-pi-lot",
   "version": "0.1.0",
   "description": "Microsoft Copilot provider extension for pi coding agent.",
   "license": "MIT",
