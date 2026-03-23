@@ -3,6 +3,8 @@
 Microsoft Copilot provider extension for `pi`.
 
 <img width="1094" height="1200" alt="image" src="https://github.com/user-attachments/assets/fb12fb42-bc43-4e18-b77d-4f1d27ababe1" />
+<img width="1441" height="1187" alt="Screenshot 2026-03-23 152210" src="https://github.com/user-attachments/assets/3b6b7552-74b7-4931-bf39-9b3c83dbff74" />
+
 
 
 ## Install
