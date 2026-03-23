@@ -1,6 +1,6 @@
 import EventEmitter from "node:events";
 import WebSocket from "ws";
-import type { CopilotConfig } from "../types.js";
+import type { CopilotRequestConfig } from "../types.js";
 import type { SessionTraceWriter } from "../core/session-trace.js";
 import { buildWebSocketHeaders, buildWebSocketUrl } from "../protocol/messages.js";
 
@@ -17,7 +17,7 @@ export class CopilotWebSocketClient extends EventEmitter<CopilotWebSocketClientE
   private socket: WebSocket | null = null;
 
   constructor(
-    private readonly config: CopilotConfig,
+    private readonly config: CopilotRequestConfig,
     private readonly clientSessionId: string,
     private readonly webSocketFactory: (url: URL, options: { headers: Record<string, string> }) => WebSocket = (
       url,

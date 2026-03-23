@@ -3,7 +3,6 @@ import type { StopReason, Usage } from "@mariozechner/pi-ai";
 export type CopilotMode = "reasoning" | "smart";
 
 export interface CopilotConfig {
-  accessToken: string;
   cookie: string;
   conversationId?: string;
   clientSessionId?: string;
@@ -15,6 +14,10 @@ export interface CopilotConfig {
   traceFile?: string;
   origin: string;
   userAgent: string;
+}
+
+export interface CopilotRequestConfig extends CopilotConfig {
+  accessToken: string;
 }
 
 export interface CopilotServerConfig {
@@ -31,10 +34,11 @@ export interface CopilotServerConfig {
 }
 
 export interface PersistedCopilotState {
-  version: 1;
+  version: 1 | 2;
   sessionId: string;
   conversationId: string;
   clientSessionId: string;
+  accessTokenFingerprint?: string;
   updatedAt: string;
 }
 

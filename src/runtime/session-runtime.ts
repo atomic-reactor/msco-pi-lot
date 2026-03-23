@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   createAssistantMessageEventStream,
   type AssistantMessage,
@@ -10,6 +11,7 @@ import type {
   CopilotConfig,
   CopilotInboundEvent,
   CopilotMode,
+  CopilotRequestConfig,
   CopilotServerConfig,
   PersistedCopilotState
 } from "../types.js";
@@ -51,10 +53,10 @@ interface RequestPolicy {
 export class CopilotSessionRuntime {
   private state: PersistedCopilotState;
   private transport: CopilotWebSocketClient | null = null;
-  private readonly conversationService: CopilotConversationService;
   private inflight = false;
   private lastInboundEventId: string | undefined;
   private serverConfigPromise: Promise<CopilotServerConfig> | null = null;
+  private activeAccessTokenFingerprint: string | undefined;
 
   constructor(
     private readonly config: CopilotConfig,
@@ -64,14 +66,12 @@ export class CopilotSessionRuntime {
     private readonly dependencies: SessionRuntimeDependencies = {}
   ) {
     this.state = persistedState || {
-      version: 1,
+      version: 2,
       sessionId,
       conversationId: config.conversationId || "",
       clientSessionId: config.clientSessionId || generateClientSessionId(),
       updatedAt: new Date().toISOString()
     };
-
-    this.conversationService = new CopilotConversationService(config, dependencies.fetchImpl, dependencies.traceWriter);
   }
 
   get persistedState(): PersistedCopilotState {
@@ -81,6 +81,7 @@ export class CopilotSessionRuntime {
   updatePersistedState(persistedState: PersistedCopilotState | undefined): void {
     if (persistedState) {
       this.state = persistedState;
+      this.activeAccessTokenFingerprint = persistedState.accessTokenFingerprint;
     }
   }
 
@@ -90,11 +91,25 @@ export class CopilotSessionRuntime {
     this.inflight = false;
   }
 
-  async streamPrompt(model: Model<any>, prompt: string, abortSignal?: AbortSignal): Promise<AssistantMessageEventStream> {
-    const serverConfig = await this.getServerConfig();
+  async streamPrompt(
+    model: Model<any>,
+    prompt: string,
+    accessToken: string | undefined,
+    abortSignal?: AbortSignal
+  ): Promise<AssistantMessageEventStream> {
+    if (!accessToken?.trim()) {
+      return createImmediateErrorStream(
+        model,
+        "Microsoft Copilot is not logged in. Run /login microsoft-copilot or set MICROSOFT_COPILOT_ACCESS_TOKEN."
+      );
+    }
+
+    await this.prepareForAccessToken(accessToken);
+    const serverConfig = await this.getServerConfig(accessToken);
     return this.startRequest({
       model,
       prompt: truncateForTransport(prompt, getPromptBudget(serverConfig.maxTextMessageLength)),
+      accessToken,
       abortSignal,
       mode: "streamingText"
     });
@@ -104,15 +119,25 @@ export class CopilotSessionRuntime {
     model: Model<any>,
     context: Context,
     mode: CopilotMode | undefined,
+    accessToken: string | undefined,
     abortSignal?: AbortSignal
   ): Promise<AssistantMessageEventStream> {
-    const serverConfig = await this.getServerConfig();
+    if (!accessToken?.trim()) {
+      return createImmediateErrorStream(
+        model,
+        "Microsoft Copilot is not logged in. Run /login microsoft-copilot or set MICROSOFT_COPILOT_ACCESS_TOKEN."
+      );
+    }
+
+    await this.prepareForAccessToken(accessToken);
+    const serverConfig = await this.getServerConfig(accessToken);
     const builtPrompt = buildToolPrompt(context, { maxPromptChars: getPromptBudget(serverConfig.maxTextMessageLength) });
     this.dependencies.traceWriter?.write("prompt.built", builtPrompt.metadata);
     return this.startRequest({
       model,
       prompt: builtPrompt.prompt,
       copilotMode: mode,
+      accessToken,
       abortSignal,
       mode: "toolAware"
     });
@@ -122,6 +147,7 @@ export class CopilotSessionRuntime {
     model: Model<any>;
     prompt: string;
     copilotMode?: CopilotMode;
+    accessToken: string;
     abortSignal?: AbortSignal;
     mode: ResponseHandlingMode;
     policy?: RequestPolicy;
@@ -170,6 +196,7 @@ export class CopilotSessionRuntime {
       input.model,
       input.prompt,
       input.copilotMode,
+      input.accessToken,
       input.mode,
       input.abortSignal,
       policy
@@ -182,6 +209,7 @@ export class CopilotSessionRuntime {
     model: Model<any>,
     prompt: string,
     copilotMode: CopilotMode | undefined,
+    accessToken: string,
     responseHandlingMode: ResponseHandlingMode,
     abortSignal: AbortSignal | undefined,
     policy: RequestPolicy
@@ -224,8 +252,8 @@ export class CopilotSessionRuntime {
         return;
       }
 
-      const { conversationId } = await this.ensureSession();
-      const transport = await this.ensureConnected();
+      const { conversationId } = await this.ensureSession(accessToken);
+      const transport = await this.ensureConnected(accessToken);
 
       const partial = createAssistantMessage(model, "stop", []);
       const textContent = { type: "text" as const, text: "" };
@@ -290,11 +318,12 @@ export class CopilotSessionRuntime {
           stage: policy.stage
         });
         try {
-          await this.recreateConversation();
+          await this.recreateConversation(accessToken);
           const retriedStream = await this.startRequest({
             model,
             prompt: policy.originalPrompt,
             copilotMode,
+            accessToken,
             abortSignal,
             mode: responseHandlingMode,
             policy: {
@@ -325,7 +354,7 @@ export class CopilotSessionRuntime {
 
         try {
           const repairPrompt = buildRepairPrompt(policy.originalPrompt, reason, rawReply, {
-            maxPromptChars: getPromptBudget((await this.getServerConfig()).maxTextMessageLength)
+            maxPromptChars: getPromptBudget((await this.getServerConfig(accessToken)).maxTextMessageLength)
           });
           this.dependencies.traceWriter?.write("prompt.repair", {
             ...repairPrompt.metadata,
@@ -336,6 +365,7 @@ export class CopilotSessionRuntime {
             model,
             prompt: repairPrompt.prompt,
             copilotMode,
+            accessToken,
             abortSignal,
             mode: responseHandlingMode,
             policy: {
@@ -501,11 +531,11 @@ export class CopilotSessionRuntime {
     }
   }
 
-  private async ensureSession(): Promise<EnsureSessionResult> {
+  private async ensureSession(accessToken: string): Promise<EnsureSessionResult> {
     if (!this.state.conversationId) {
       this.state = {
         ...this.state,
-        conversationId: await this.conversationService.createConversation(),
+        conversationId: await this.createConversationService(accessToken).createConversation(),
         updatedAt: new Date().toISOString()
       };
       this.persistState(this.state);
@@ -517,21 +547,21 @@ export class CopilotSessionRuntime {
     };
   }
 
-  private async recreateConversation(): Promise<void> {
+  private async recreateConversation(accessToken: string): Promise<void> {
     this.transport?.disconnect(1000, "recreate-conversation");
     this.transport = null;
     this.state = {
       ...this.state,
-      conversationId: await this.conversationService.createConversation(),
+      conversationId: await this.createConversationService(accessToken).createConversation(),
       updatedAt: new Date().toISOString()
     };
     this.persistState(this.state);
   }
 
-  private async ensureConnected(): Promise<CopilotWebSocketClient> {
+  private async ensureConnected(accessToken: string): Promise<CopilotWebSocketClient> {
     if (!this.transport) {
       this.transport = new CopilotWebSocketClient(
-        this.config,
+        this.buildRequestConfig(accessToken),
         this.state.clientSessionId,
         this.dependencies.webSocketFactory,
         this.dependencies.traceWriter
@@ -547,13 +577,83 @@ export class CopilotSessionRuntime {
     return this.transport;
   }
 
-  private async getServerConfig(): Promise<CopilotServerConfig> {
+  private async getServerConfig(accessToken: string): Promise<CopilotServerConfig> {
     if (!this.serverConfigPromise) {
-      this.serverConfigPromise = this.conversationService.getServerConfig();
+      this.serverConfigPromise = this.createConversationService(accessToken).getServerConfig();
     }
 
     return this.serverConfigPromise;
   }
+
+  private createConversationService(accessToken: string): CopilotConversationService {
+    return new CopilotConversationService(
+      this.buildRequestConfig(accessToken),
+      this.dependencies.fetchImpl,
+      this.dependencies.traceWriter
+    );
+  }
+
+  private buildRequestConfig(accessToken: string): CopilotRequestConfig {
+    return {
+      ...this.config,
+      accessToken
+    };
+  }
+
+  private async prepareForAccessToken(accessToken: string): Promise<void> {
+    const nextFingerprint = fingerprintAccessToken(accessToken);
+    const persistedFingerprint = this.state.accessTokenFingerprint;
+
+    if (this.activeAccessTokenFingerprint === undefined) {
+      this.activeAccessTokenFingerprint = persistedFingerprint;
+    }
+
+    const tokenChanged =
+      (persistedFingerprint !== undefined && persistedFingerprint !== nextFingerprint) ||
+      (this.activeAccessTokenFingerprint !== undefined && this.activeAccessTokenFingerprint !== nextFingerprint);
+
+    if (!tokenChanged) {
+      this.activeAccessTokenFingerprint = nextFingerprint;
+      if (this.state.version !== 2 || persistedFingerprint !== nextFingerprint) {
+        this.state = {
+          ...this.state,
+          version: 2,
+          accessTokenFingerprint: nextFingerprint,
+          updatedAt: new Date().toISOString()
+        };
+        this.persistState(this.state);
+      }
+      return;
+    }
+
+    this.transport?.disconnect(1000, "access-token-changed");
+    this.transport = null;
+    this.serverConfigPromise = null;
+    this.lastInboundEventId = undefined;
+
+    this.state = {
+      ...this.state,
+      version: 2,
+      conversationId: "",
+      clientSessionId: generateClientSessionId(),
+      accessTokenFingerprint: nextFingerprint,
+      updatedAt: new Date().toISOString()
+    };
+    this.activeAccessTokenFingerprint = nextFingerprint;
+    this.persistState(this.state);
+  }
+}
+
+function createImmediateErrorStream(model: Model<any>, message: string): AssistantMessageEventStream {
+  const stream = createAssistantMessageEventStream();
+  queueMicrotask(() => {
+    stream.push({
+      type: "error",
+      reason: "error",
+      error: createAssistantMessage(model, "error", [], message)
+    });
+  });
+  return stream;
 }
 
 function emitFinalText(
@@ -623,4 +723,8 @@ function truncateForTransport(value: string, maxChars: number): string {
   const head = Math.max(0, Math.floor((maxChars - marker.length) * 0.7));
   const tail = Math.max(0, maxChars - marker.length - head);
   return `${value.slice(0, head)}${marker}${value.slice(value.length - tail)}`;
+}
+
+function fingerprintAccessToken(accessToken: string): string {
+  return createHash("sha256").update(accessToken).digest("hex").slice(0, 16);
 }

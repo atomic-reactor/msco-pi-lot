@@ -14,7 +14,7 @@ function reconstructState(sessionStore: CopilotSessionStore, runtimeManager: Cop
 
 function seedFreshState(sessionStore: CopilotSessionStore, runtimeManager: CopilotRuntimeManager, ctx: ExtensionContext): void {
   const state: PersistedCopilotState = {
-    version: 1,
+    version: 2,
     sessionId: ctx.sessionManager.getSessionId(),
     conversationId: "",
     clientSessionId: generateClientSessionId(),

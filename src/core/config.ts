@@ -1,5 +1,5 @@
 import dotenv from "dotenv";
-import { maskCookie, maskSecret } from "./mask-secrets.js";
+import { maskCookie } from "./mask-secrets.js";
 import type { CopilotConfig, CopilotMode } from "../types.js";
 
 const DEFAULTS = Object.freeze({
@@ -27,14 +27,6 @@ function readEnv(env: NodeJS.ProcessEnv, canonical: string, legacy?: string): st
   return env[canonical] || (legacy ? env[legacy] : undefined);
 }
 
-function requireValue(name: string, value: string | undefined): string {
-  if (!value) {
-    throw new Error(`Missing required environment variable: ${name}`);
-  }
-
-  return value;
-}
-
 function normalizeMode(value: string | undefined): CopilotMode {
   const mode = (value || DEFAULTS.mode) as CopilotMode;
   if (!ALLOWED_MODES.has(mode)) {
@@ -57,10 +49,6 @@ export function loadConfig(options: LoadConfigOptions = {}): CopilotConfig {
   const env = options.env ?? process.env;
 
   return {
-    accessToken: requireValue(
-      "MICROSOFT_COPILOT_ACCESS_TOKEN",
-      readEnv(env, "MICROSOFT_COPILOT_ACCESS_TOKEN", "COPILOT_ACCESS_TOKEN")
-    ),
     cookie: readEnv(env, "MICROSOFT_COPILOT_COOKIE", "COPILOT_COOKIE") || "",
     conversationId: readEnv(env, "MICROSOFT_COPILOT_CONVERSATION_ID", "COPILOT_CONVERSATION_ID") || undefined,
     clientSessionId: readEnv(env, "MICROSOFT_COPILOT_CLIENT_SESSION_ID", "COPILOT_CLIENT_SESSION_ID") || undefined,
@@ -78,7 +66,6 @@ export function loadConfig(options: LoadConfigOptions = {}): CopilotConfig {
 export function maskConfigForLog(config: CopilotConfig): Record<string, unknown> {
   return {
     ...config,
-    accessToken: maskSecret(config.accessToken),
     cookie: maskCookie(config.cookie)
   };
 }

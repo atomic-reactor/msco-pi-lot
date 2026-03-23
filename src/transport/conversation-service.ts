@@ -1,4 +1,4 @@
-import type { CopilotConfig, CopilotServerConfig } from "../types.js";
+import type { CopilotRequestConfig, CopilotServerConfig } from "../types.js";
 import type { SessionTraceWriter } from "../core/session-trace.js";
 
 const DEFAULT_SERVER_CONFIG: CopilotServerConfig = {
@@ -9,7 +9,7 @@ export class CopilotConversationService {
   private serverConfigPromise: Promise<CopilotServerConfig> | null = null;
 
   constructor(
-    private readonly config: CopilotConfig,
+    private readonly config: CopilotRequestConfig,
     private readonly fetchImpl: typeof fetch = fetch,
     private readonly traceWriter?: SessionTraceWriter
   ) {}

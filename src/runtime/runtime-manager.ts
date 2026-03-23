@@ -28,12 +28,19 @@ export class CopilotRuntimeManager {
 
   async streamSimple(sessionId: string, model: Model<any>, prompt: string, signal?: AbortSignal) {
     const runtime = this.getOrCreateRuntime(sessionId);
-    return runtime.streamPrompt(model, prompt, signal);
+    return runtime.streamPrompt(model, prompt, undefined, signal);
   }
 
-  async streamContext(sessionId: string, model: Model<any>, context: Context, mode: CopilotMode | undefined, signal?: AbortSignal) {
+  async streamContext(
+    sessionId: string,
+    model: Model<any>,
+    context: Context,
+    mode: CopilotMode | undefined,
+    accessToken: string | undefined,
+    signal?: AbortSignal
+  ) {
     const runtime = this.getOrCreateRuntime(sessionId);
-    return runtime.streamContext(model, context, mode, signal);
+    return runtime.streamContext(model, context, mode, accessToken, signal);
   }
 
   getOrCreateRuntime(sessionId: string): CopilotSessionRuntime {

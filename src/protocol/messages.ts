@@ -1,4 +1,4 @@
-import type { CopilotConfig, CopilotMode } from "../types.js";
+import type { CopilotMode, CopilotRequestConfig } from "../types.js";
 
 const SUPPORTED_FEATURES = ["partial-generated-images"];
 
@@ -57,7 +57,7 @@ const SUPPORTED_UI_COMPONENTS = {
 
 const SUPPORTED_ACTIONS: string[] = [];
 
-export function buildWebSocketUrl(config: CopilotConfig, clientSessionId: string): URL {
+export function buildWebSocketUrl(config: CopilotRequestConfig, clientSessionId: string): URL {
   const url = new URL("wss://copilot.microsoft.com/c/api/chat");
   url.searchParams.set("api-version", config.apiVersion);
   url.searchParams.set("clientSessionId", clientSessionId);
@@ -67,7 +67,7 @@ export function buildWebSocketUrl(config: CopilotConfig, clientSessionId: string
   return url;
 }
 
-export function buildWebSocketHeaders(config: CopilotConfig): Record<string, string> {
+export function buildWebSocketHeaders(config: CopilotRequestConfig): Record<string, string> {
   const headers: Record<string, string> = {
     Origin: config.origin,
     "User-Agent": config.userAgent

@@ -18,9 +18,21 @@ pi install https://github.com/atomic-reactor/msco-pi-lot@main
 
 After install, restart `pi` and select the `microsoft-copilot/copilot` model.
 
+For interactive use, log in once from inside `pi`:
+
+```text
+/login microsoft-copilot
+```
+
+Paste your Microsoft Copilot access token when prompted. `pi` stores the credential in `~/.pi/agent/auth.json`. You can remove it later with:
+
+```text
+/logout microsoft-copilot
+```
+
 ## Configuration
 
-Set your Copilot credentials in your shell or in a local `.env` file next to the installed package:
+Interactive login only supports pasting an access token. For headless or non-interactive use, you can still set Copilot credentials in your shell or in a local `.env` file next to the installed package:
 
 ```dotenv
 MICROSOFT_COPILOT_ACCESS_TOKEN=
@@ -34,7 +46,7 @@ MICROSOFT_COPILOT_TRACE_FILE=logs/copilot-session.ndjson
 
 Legacy `COPILOT_*` variable names are still accepted.
 
-Only `MICROSOFT_COPILOT_ACCESS_TOKEN` is required.
+Only `MICROSOFT_COPILOT_ACCESS_TOKEN` is required. Cookie-based settings remain optional transport tweaks, not a login method.
 
 ## Behavior
 

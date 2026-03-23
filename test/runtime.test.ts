@@ -41,7 +41,6 @@ const model: Model<"openai-completions"> = {
 };
 
 const baseConfig: CopilotConfig = {
-  accessToken: "token",
   cookie: "",
   mode: "reasoning",
   channel: "edge",
@@ -51,6 +50,7 @@ const baseConfig: CopilotConfig = {
   origin: "https://copilot.microsoft.com",
   userAgent: "test-agent"
 };
+const accessToken = "token";
 
 function createFetchMock(overrides: {
   conversationId?: string;
@@ -129,7 +129,7 @@ describe("session runtime", () => {
       }
     );
 
-    const stream = await runtime.streamPrompt(model, "Hello");
+    const stream = await runtime.streamPrompt(model, "Hello", accessToken);
     const eventsPromise = collectEvents(stream);
 
     await waitFor(() => {
@@ -167,7 +167,7 @@ describe("session runtime", () => {
     );
 
     (runtime as any).inflight = true;
-    const second = await runtime.streamPrompt(model, "Again");
+    const second = await runtime.streamPrompt(model, "Again", accessToken);
 
     const secondEvent = await second[Symbol.asyncIterator]().next();
     expect(secondEvent.value.type).toBe("error");
@@ -208,7 +208,8 @@ describe("session runtime", () => {
           } as any
         ]
       },
-      undefined
+      undefined,
+      accessToken
     );
 
     const eventsPromise = collectEvents(stream);
@@ -273,7 +274,8 @@ describe("session runtime", () => {
           } as any
         ]
       },
-      undefined
+      undefined,
+      accessToken
     );
 
     const eventsPromise = collectEvents(stream);
@@ -366,7 +368,8 @@ describe("session runtime", () => {
           } as any
         ]
       },
-      undefined
+      undefined,
+      accessToken
     );
 
     const eventsPromise = collectEvents(stream);
@@ -462,7 +465,8 @@ describe("session runtime", () => {
           } as any
         ]
       },
-      undefined
+      undefined,
+      accessToken
     );
 
     const eventsPromise = collectEvents(stream);
@@ -510,4 +514,84 @@ describe("session runtime", () => {
     expect(result.stopReason).toBe("toolUse");
     expect(result.content).toMatchObject([{ type: "toolCall", name: "read", arguments: { path: "package.json" } }]);
   });
+
+  test("fails with guidance when no access token is configured", async () => {
+    const runtime = new CopilotSessionRuntime(baseConfig, "session-1", undefined, () => {}, {
+      fetchImpl: createFetchMock()
+    });
+
+    const stream = await runtime.streamPrompt(model, "Hello", undefined);
+    const event = await stream[Symbol.asyncIterator]().next();
+
+    expect(event.value.type).toBe("error");
+    expect(event.value.error.errorMessage).toContain("/login microsoft-copilot");
+  });
+
+  test("rotating access tokens resets the persisted conversation and websocket", async () => {
+    const sockets: MockSocket[] = [];
+    const persistedStates: PersistedStateSnapshot[] = [];
+    let nextConversationId = 2;
+
+    const runtime = new CopilotSessionRuntime(
+      { ...baseConfig, conversationId: "conv-1", clientSessionId: "client-1" },
+      "session-1",
+      {
+        version: 2,
+        sessionId: "session-1",
+        conversationId: "conv-1",
+        clientSessionId: "client-1",
+        accessTokenFingerprint: "stale-fingerprint",
+        updatedAt: "2026-03-20T00:00:00.000Z"
+      },
+      (state) => {
+        persistedStates.push({
+          conversationId: state.conversationId,
+          clientSessionId: state.clientSessionId,
+          accessTokenFingerprint: state.accessTokenFingerprint
+        });
+      },
+      {
+        fetchImpl: createFetchMock({
+          onConversationCreate: async () =>
+            new Response(JSON.stringify({ conversationId: `conv-${nextConversationId++}` }), {
+              status: 200,
+              headers: { "content-type": "application/json" }
+            })
+        }),
+        webSocketFactory: () => {
+          const socket = new MockSocket();
+          sockets.push(socket);
+          return socket as any;
+        }
+      }
+    );
+
+    const stream = await runtime.streamPrompt(model, "Hello", "rotated-token");
+    const eventsPromise = collectEvents(stream);
+
+    await waitFor(() => {
+      expect(sockets).toHaveLength(1);
+      expect(persistedStates[0]).toMatchObject({
+        conversationId: "",
+        clientSessionId: expect.any(String),
+        accessTokenFingerprint: expect.any(String)
+      });
+      expect(persistedStates[0].clientSessionId).not.toBe("client-1");
+    });
+
+    sockets[0].emit("message", JSON.stringify({ event: "appendText", id: "1", text: "Hi" }));
+    sockets[0].emit("message", JSON.stringify({ event: "done", id: "2" }));
+
+    await eventsPromise;
+    expect(persistedStates.at(-1)).toMatchObject({
+      conversationId: "conv-2",
+      accessTokenFingerprint: persistedStates[0].accessTokenFingerprint
+    });
+  });
 });
+
+interface PersistedStateSnapshot {
+  conversationId: string;
+  clientSessionId: string;
+  accessTokenFingerprint?: string;
+}
