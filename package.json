@@ -2,6 +2,7 @@
   "name": "msco-pi-lot",
   "version": "0.1.0",
   "description": "Microsoft Copilot provider extension for pi coding agent.",
+  "license": "MIT",
   "type": "module",
   "main": "./src/index.ts",
   "exports": "./src/index.ts",
