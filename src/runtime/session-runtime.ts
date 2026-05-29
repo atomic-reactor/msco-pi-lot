@@ -570,7 +570,7 @@ export class CopilotSessionRuntime {
       } else {
         // Subsequent message: Send only delta (server already has conversation context)
         transport.sendJson(buildIncrementalMessageEvent({
-          conversationId: await this.createConversationService(accessToken).createConversation(),
+          conversationId,
           delta: prompt,
           lastEventId: this.lastInboundEventId
         }));
