@@ -40,6 +40,10 @@ export interface PersistedCopilotState {
   clientSessionId: string;
   accessTokenFingerprint?: string;
   updatedAt: string;
+
+  // NEW FIELDS - Minimal state for error recovery and session management (NOT full history)
+  lastEventId?: string;              // Last event ID from server for ordering/deduplication
+  hasSentInitialPrompt?: boolean;    // Track if initial system prompt was sent in this WebSocket session
 }
 
 export interface CopilotInboundEvent {

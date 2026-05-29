@@ -22,6 +22,7 @@ import {
   buildPongEvent,
   buildReportLocalConsentsEvent,
   buildSendEvent,
+  buildIncrementalMessageEvent,
   buildSetOptionsEvent
 } from "../protocol/messages.js";
 import { CopilotConversationService } from "../transport/conversation-service.js";
@@ -55,14 +56,20 @@ export class CopilotSessionRuntime {
   private transport: CopilotWebSocketClient | null = null;
   private inflight = false;
   private lastInboundEventId: string | undefined;
+  
+  // NEW FIELD - Persist state function (TECHNICAL_SPEC.md Section 3)
+  private persistState: (state: PersistedCopilotState) => void;
   private serverConfigPromise: Promise<CopilotServerConfig> | null = null;
   private activeAccessTokenFingerprint: string | undefined;
+
+  // NEW FIELDS - Track message sequence and state for incremental protocol (TECHNICAL_SPEC.md Section 3)
+  private hasSentInitialPrompt = false;      // Has this WebSocket session received initial prompt?
 
   constructor(
     private readonly config: CopilotConfig,
     sessionId: string,
     persistedState: PersistedCopilotState | undefined,
-    private readonly persistState: (state: PersistedCopilotState) => void,
+    persistState: (state: PersistedCopilotState) => void,
     private readonly dependencies: SessionRuntimeDependencies = {}
   ) {
     this.state = persistedState || {
@@ -72,23 +79,55 @@ export class CopilotSessionRuntime {
       clientSessionId: config.clientSessionId || generateClientSessionId(),
       updatedAt: new Date().toISOString()
     };
-  }
-
-  get persistedState(): PersistedCopilotState {
-    return this.state;
-  }
-
-  updatePersistedState(persistedState: PersistedCopilotState | undefined): void {
+    
+    this.persistState = persistState;
+    
+    // Restore state from persisted data if available (TECHNICAL_SPEC.md Section 3A)
     if (persistedState) {
-      this.state = persistedState;
-      this.activeAccessTokenFingerprint = persistedState.accessTokenFingerprint;
+      this.hasSentInitialPrompt = persistedState.hasSentInitialPrompt || false;
+      this.lastInboundEventId = persistedState.lastEventId || undefined;
+    }
+  }
+  updatePersistedState(persistedState: PersistedCopilotState | undefined): void {
+    if (!persistedState) {
+      return;
+    }
+
+    // Restore state from persisted data (TECHNICAL_SPEC.md Section 3C)
+    this.hasSentInitialPrompt = persistedState.hasSentInitialPrompt || false;
+    this.lastInboundEventId = persistedState.lastEventId || undefined;
+    
+    // Update active fingerprint if token changed
+    this.activeAccessTokenFingerprint = persistedState.accessTokenFingerprint;
+  }
+
+  async updateLastEventId(eventId: string): Promise<void> {
+    this.lastInboundEventId = eventId;
+    
+    // Persist to state store if version 2
+    if (this.state.version === 2) {
+      this.state.lastEventId = eventId;
+      this.persistState(this.state);
     }
   }
 
+  async resetInitialPromptFlag(): Promise<void> {
+    this.hasSentInitialPrompt = false;
+    
+    // Persist to state store if version 2
+    if (this.state.version === 2) {
+      this.state.hasSentInitialPrompt = false;
+      this.persistState(this.state);
+    }
+  }
+  
   disconnect(): void {
     this.transport?.disconnect(1000, "session-switch");
     this.transport = null;
     this.inflight = false;
+    
+    // Reset state on disconnect so next connection can send full prompt (TECHNICAL_SPEC.md Section 3D)
+    this.hasSentInitialPrompt = false;
   }
 
   async streamPrompt(
@@ -317,6 +356,8 @@ export class CopilotSessionRuntime {
           previousConversationId: this.state.conversationId,
           stage: policy.stage
         });
+          // Reset initial prompt flag for new conversation so we can send full prompt (TECHNICAL_SPEC.md Section 3D)
+          await this.resetInitialPromptFlag();
         try {
           await this.recreateConversation(accessToken);
           const retriedStream = await this.startRequest({
@@ -361,6 +402,8 @@ export class CopilotSessionRuntime {
             stage: "same-conversation-repair",
             baseStage: policy.stage
           });
+          // Reset initial prompt flag for repaired prompt so we can send full prompt
+          await this.resetInitialPromptFlag();
           const retriedStream = await this.startRequest({
             model,
             prompt: repairPrompt.prompt,
@@ -378,6 +421,7 @@ export class CopilotSessionRuntime {
           for await (const event of retriedStream) {
             stream.push(event);
           }
+          
           settleCompletion();
         } catch (error) {
           failAfterHandOff(error instanceof Error ? error.message : String(error));
@@ -506,45 +550,46 @@ export class CopilotSessionRuntime {
         fail(aborted ? "aborted" : "error", error.message);
       };
 
+        
+      // NEW LOGIC - Detect first vs subsequent message in WebSocket session (TECHNICAL_SPEC.md Section 3C)
+      const isFirstMessageInSession = !this.hasSentInitialPrompt;
+
+      if (isFirstMessageInSession) {
+        // First message: Send full prompt with system context
+        // Server stores this and maintains conversation state
+        transport.sendJson(buildMessagePreviewEvent({ conversationId, prompt }));
+        transport.sendJson(buildSendEvent({
+          conversationId,
+          prompt,
+          mode: copilotMode || this.config.mode,
+          isIncremental: false // Explicitly send as full prompt
+        }));
+        
+        // Mark that we've sent the initial prompt in this session
+        this.hasSentInitialPrompt = true;
+      } else {
+        // Subsequent message: Send only delta (server already has conversation context)
+        transport.sendJson(buildIncrementalMessageEvent({
+          conversationId: await this.createConversationService(accessToken).createConversation(),
+          delta: prompt,
+          lastEventId: this.lastInboundEventId
+        }));
+      }
+
       transport.on("message", onMessage);
       transport.on("close", onClose);
       transport.on("error", onError);
 
-      transport.sendJson(buildMessagePreviewEvent({ conversationId, prompt }));
-      transport.sendJson(buildSendEvent({ conversationId, prompt, mode: copilotMode || this.config.mode }));
-      await completion;
     } catch (error) {
       stream.push({
         type: "error",
-        reason: aborted ? "aborted" : "error",
-        error: createAssistantMessage(
-          model,
-          aborted ? "aborted" : "error",
-          [],
-          error instanceof Error ? error.message : String(error)
-        )
+        reason: "error",
+        error: createAssistantMessage(model, "error", [], error instanceof Error ? error.message : String(error))
       });
       settleCompletion();
-    } finally {
-      removeAbortListener?.();
-      this.inflight = false;
-    }
-  }
-
-  private async ensureSession(accessToken: string): Promise<EnsureSessionResult> {
-    if (!this.state.conversationId) {
-      this.state = {
-        ...this.state,
-        conversationId: await this.createConversationService(accessToken).createConversation(),
-        updatedAt: new Date().toISOString()
-      };
-      this.persistState(this.state);
     }
 
-    return {
-      conversationId: this.state.conversationId,
-      clientSessionId: this.state.clientSessionId
-    };
+    return completion;
   }
 
   private async recreateConversation(accessToken: string): Promise<void> {
@@ -556,6 +601,18 @@ export class CopilotSessionRuntime {
       updatedAt: new Date().toISOString()
     };
     this.persistState(this.state);
+  }
+
+  private async ensureSession(accessToken: string): Promise<EnsureSessionResult> {
+    if (!this.state.conversationId) {
+      this.state.conversationId = await this.createConversationService(accessToken).createConversation();
+      this.persistState(this.state);
+    }
+
+    return {
+      conversationId: this.state.conversationId,
+      clientSessionId: this.state.clientSessionId
+    };
   }
 
   private async ensureConnected(accessToken: string): Promise<CopilotWebSocketClient> {
@@ -570,6 +627,9 @@ export class CopilotSessionRuntime {
 
     if (!this.transport.isConnected) {
       await this.transport.connect();
+      
+      // Reset initial prompt flag on reconnection so we can send full prompt again (TECHNICAL_SPEC.md Section 3D)
+      await this.resetInitialPromptFlag();
       this.transport.sendJson(buildSetOptionsEvent());
       this.transport.sendJson(buildReportLocalConsentsEvent());
     }
