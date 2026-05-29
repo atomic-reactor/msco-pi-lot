@@ -567,6 +567,10 @@ export class CopilotSessionRuntime {
         
         // Mark that we've sent the initial prompt in this session
         this.hasSentInitialPrompt = true;
+        if (this.state.version === 2) {
+          this.state.hasSentInitialPrompt = true;
+          this.persistState(this.state);
+        }
       } else {
         // Subsequent message: Send only delta (server already has conversation context)
         transport.sendJson(buildIncrementalMessageEvent({
