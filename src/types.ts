@@ -14,6 +14,9 @@ export interface CopilotConfig {
   traceFile?: string;
   origin: string;
   userAgent: string;
+  
+  // NEW: Feature flag for stateful WebSocket communication
+  enableStatefulMode?: boolean; // Default true - leverages server-side conversation state
 }
 
 export interface CopilotRequestConfig extends CopilotConfig {

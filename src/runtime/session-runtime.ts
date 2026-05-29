@@ -540,7 +540,16 @@ export class CopilotSessionRuntime {
         }
       };
 
-      const onClose = () => {
+      const onClose = (event: { code: number; reason: string }) => {
+        // Reset initial prompt flag on abnormal closure so next connection can send full prompt
+        if (!completed && event.code !== 1000 && !aborted) {
+          this.hasSentInitialPrompt = false;
+          if (this.state.version === 2) {
+            this.state.hasSentInitialPrompt = false;
+            this.persistState(this.state);
+          }
+        }
+        
         if (!completed) {
           fail(aborted ? "aborted" : "error", aborted ? "Request was aborted" : "Socket closed mid-response");
         }
@@ -553,9 +562,19 @@ export class CopilotSessionRuntime {
         
       // NEW LOGIC - Detect first vs subsequent message in WebSocket session (TECHNICAL_SPEC.md Section 3C)
       const isFirstMessageInSession = !this.hasSentInitialPrompt;
+      const useStatefulMode = this.config.enableStatefulMode !== false; // Default true
 
-      if (isFirstMessageInSession) {
-        // First message: Send full prompt with system context
+      if (!useStatefulMode) {
+        // Feature flag disabled: Always send full prompt (backward compatible behavior)
+        transport.sendJson(buildMessagePreviewEvent({ conversationId, prompt }));
+        transport.sendJson(buildSendEvent({
+          conversationId,
+          prompt,
+          mode: copilotMode || this.config.mode,
+          isIncremental: false
+        }));
+      } else if (isFirstMessageInSession) {
+        // First message in session: Send full prompt with system context
         // Server stores this and maintains conversation state
         transport.sendJson(buildMessagePreviewEvent({ conversationId, prompt }));
         transport.sendJson(buildSendEvent({
@@ -584,16 +603,23 @@ export class CopilotSessionRuntime {
       transport.on("close", onClose);
       transport.on("error", onError);
 
+      await completion;
     } catch (error) {
       stream.push({
         type: "error",
-        reason: "error",
-        error: createAssistantMessage(model, "error", [], error instanceof Error ? error.message : String(error))
+        reason: aborted ? "aborted" : "error",
+        error: createAssistantMessage(
+          model,
+          aborted ? "aborted" : "error",
+          [],
+          error instanceof Error ? error.message : String(error)
+        )
       });
       settleCompletion();
+    } finally {
+      removeAbortListener?.();
+      this.inflight = false;
     }
-
-    return completion;
   }
 
   private async recreateConversation(accessToken: string): Promise<void> {

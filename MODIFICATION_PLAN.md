@@ -305,10 +305,14 @@ Add optional configuration to control behavior:
 export interface CopilotConfig {
   // ... existing fields ...
   
-  enableStatefulMode?: boolean; // NEW - default false for backward compatibility
+  enableStatefulMode?: boolean; // NEW - default true for stateful mode
   maxConversationHistorySize?: number; // NEW - limit history size (default: 50)
 }
 ```
+
+**Environment Variable**: `MICROSOFT_COPILOT_ENABLE_STATEFUL_MODE` or `COPILOT_ENABLE_STATEFUL_MODE`
+- Default: `true` (stateful mode enabled)
+- Set to `false` to disable and use legacy behavior (send full prompt every time)
 
 ---
 
@@ -326,14 +330,16 @@ export interface CopilotConfig {
 
 ## Backward Compatibility
 
-**Default Behavior**: Keep `enableStatefulMode = false` by default. This ensures:
-1. Existing users continue to work without changes
-2. Can test stateful mode in production gradually
-3. Easy rollback if issues arise
+**Default Behavior**: Keep `enableStatefulMode = true` by default (stateful mode enabled).
+Users who need legacy behavior can disable it:
+```bash
+export MICROSOFT_COPILOT_ENABLE_STATEFUL_MODE=false
+```
 
-**Migration Path**: 
-- v1.x: Stateful mode opt-in via config
-- v2.0+: Default to stateful mode, deprecate old behavior
+This ensures:
+1. New deployments get the benefits of stateful communication automatically
+2. Users experiencing issues can opt-out via environment variable
+3. Easy rollback if issues arise
 
 ---
 
