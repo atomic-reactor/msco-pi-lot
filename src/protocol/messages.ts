@@ -114,6 +114,7 @@ export function buildMessagePreviewEvent(input: {
 export function buildIncrementalMessageEvent(input: {
   conversationId: string;
   delta: string;
+  mode?: CopilotMode;
   lastEventId?: string;
 }): Record<string, unknown> {
   return {
@@ -126,7 +127,7 @@ export function buildIncrementalMessageEvent(input: {
         isIncremental: true // NEW FLAG - tells server this is a delta, not full prompt
       }
     ],
-    mode: "smart",
+    mode: input.mode ?? "smart",
     lastEventId: input.lastEventId || undefined
   };
 }
