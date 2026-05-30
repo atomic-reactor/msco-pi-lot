@@ -175,6 +175,113 @@ describe("session runtime", () => {
     expect(secondEvent.value.error.errorMessage).toMatch(/one in-flight request/);
   });
 
+  test("uses incremental current-turn payloads after the first stateful tool-aware request", async () => {
+    let socket: MockSocket | undefined;
+    const runtime = new CopilotSessionRuntime(
+      { ...baseConfig, conversationId: "conv-1", clientSessionId: "client-1" },
+      "session-1",
+      undefined,
+      () => {},
+      {
+        fetchImpl: createFetchMock(),
+        webSocketFactory: () => {
+          socket = new MockSocket();
+          return socket as any;
+        }
+      }
+    );
+
+    const first = await runtime.streamContext(
+      model,
+      {
+        messages: [{ role: "user", content: "List files.", timestamp: Date.now() }],
+        tools: [
+          {
+            name: "ls",
+            description: "List files in a directory",
+            parameters: {
+              type: "object",
+              properties: {
+                path: { type: "string" }
+              }
+            }
+          } as any
+        ]
+      },
+      undefined,
+      accessToken
+    );
+
+    const firstEvents = collectEvents(first);
+    await waitFor(() => {
+      expect(socket?.sent.map((payload) => payload.event)).toEqual([
+        "setOptions",
+        "reportLocalConsents",
+        "messagePreview",
+        "send"
+      ]);
+    });
+
+    socket?.emit(
+      "message",
+      JSON.stringify({ event: "appendText", id: "1", text: '{"responseType":"message","text":"First done"}' })
+    );
+    socket?.emit("message", JSON.stringify({ event: "done", id: "2" }));
+    await firstEvents;
+    const firstResult = await first.result();
+    expect(firstResult.usage.input).toBeGreaterThan(0);
+
+    const second = await runtime.streamContext(
+      model,
+      {
+        messages: [{ role: "user", content: "Now inspect package.json.", timestamp: Date.now() }],
+        tools: [
+          {
+            name: "read",
+            description: "Read file",
+            parameters: {
+              type: "object",
+              properties: {
+                path: { type: "string" }
+              }
+            }
+          } as any
+        ]
+      },
+      undefined,
+      accessToken
+    );
+
+    const secondEvents = collectEvents(second);
+
+    await waitFor(() => {
+      expect(socket?.sent.map((payload) => payload.event)).toEqual([
+        "setOptions",
+        "reportLocalConsents",
+        "messagePreview",
+        "send",
+        "send"
+      ]);
+      const incrementalPayload = socket?.sent[4] as { content: Array<{ text: string; isIncremental?: boolean }> };
+      expect(incrementalPayload.content[0].isIncremental).toBe(true);
+      expect(incrementalPayload.content[0].text).toContain("TASK");
+      expect(incrementalPayload.content[0].text).toContain("Now inspect package.json.");
+      expect(incrementalPayload.content[0].text).not.toContain("AVAILABLE TOOLS");
+      expect(incrementalPayload.content[0].text).not.toContain("WORKING DIRECTORY");
+    });
+
+    socket?.emit(
+      "message",
+      JSON.stringify({ event: "appendText", id: "3", text: '{"responseType":"message","text":"Second done"}' })
+    );
+    socket?.emit("message", JSON.stringify({ event: "done", id: "4" }));
+
+    const events = await secondEvents;
+    expect(events.map((event) => event.type)).toEqual(["start", "text_start", "text_delta", "text_end", "done"]);
+    const secondResult = await second.result();
+    expect(secondResult.usage.input).toBeGreaterThan(firstResult.usage.input);
+  });
+
   test("maps a tool-aware Copilot JSON response into pi tool call events", async () => {
     let socket: MockSocket | undefined;
     const runtime = new CopilotSessionRuntime(

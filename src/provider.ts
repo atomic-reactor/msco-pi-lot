@@ -31,13 +31,13 @@ export function createProviderConfig(runtimeManager: CopilotRuntimeManager): Pro
   return {
     api: COPILOT_API,
     baseUrl: "https://copilot.microsoft.com/c/api",
-    apiKey: "MICROSOFT_COPILOT_ACCESS_TOKEN",
+    apiKey: "$MICROSOFT_COPILOT_ACCESS_TOKEN",
     models: PROVIDER_MODELS,
     oauth: {
       name: "Microsoft Copilot",
       login: promptForAccessToken,
       refreshToken: refreshPastedAccessToken,
-      getApiKey: (credentials) => credentials.access
+      getApiKey: (credentials) => normalizeAccessToken(credentials.access)
     },
     streamSimple(model: Model<any>, context: Context, options?: SimpleStreamOptions) {
       const sessionId = options?.sessionId || "default";
@@ -46,7 +46,7 @@ export function createProviderConfig(runtimeManager: CopilotRuntimeManager): Pro
         model,
         context,
         resolveCopilotMode(options?.reasoning),
-        options?.apiKey,
+        normalizeAccessToken(options?.apiKey),
         options?.signal
       ) as any;
     }
@@ -54,11 +54,11 @@ export function createProviderConfig(runtimeManager: CopilotRuntimeManager): Pro
 }
 
 export async function promptForAccessToken(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
-  const token = (await callbacks.onPrompt({
+  const token = normalizeAccessToken(await callbacks.onPrompt({
     message: "Paste your Microsoft Copilot access token:",
     placeholder: "Paste access token",
     allowEmpty: false
-  })).trim();
+  }));
 
   if (!token) {
     throw new Error("A Microsoft Copilot access token is required");
@@ -72,13 +72,17 @@ export async function promptForAccessToken(callbacks: OAuthLoginCallbacks): Prom
 }
 
 export async function refreshPastedAccessToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
-  if (!credentials.access?.trim()) {
+  const access = normalizeAccessToken(credentials.access);
+  const refresh = normalizeAccessToken(credentials.refresh || credentials.access);
+
+  if (!access) {
     throw new Error("Microsoft Copilot token is missing. Run /login microsoft-copilot again.");
   }
 
   return {
     ...credentials,
-    refresh: credentials.refresh || credentials.access,
+    access,
+    refresh,
     expires: Date.now() + NON_REFRESHING_TOKEN_TTL_MS
   };
 }
@@ -93,4 +97,20 @@ export function resolveCopilotMode(reasoning: ThinkingLevel | "off" | undefined)
   }
 
   return "reasoning";
+}
+
+export function normalizeAccessToken(token: string | undefined): string {
+  if (!token) {
+    return "";
+  }
+
+  const trimmed = token.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  const withoutHeaderName = trimmed.replace(/^authorization\s*:\s*/i, "").trim();
+  const withoutBearer = withoutHeaderName.replace(/^bearer\s+/i, "").trim();
+  const withoutQuotes = withoutBearer.replace(/^['"]|['"]$/g, "").trim();
+  return withoutQuotes;
 }

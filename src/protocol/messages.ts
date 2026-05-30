@@ -110,16 +110,41 @@ export function buildMessagePreviewEvent(input: {
   });
 }
 
+// NEW FUNCTION - Build incremental delta message for subsequent messages in WebSocket session
+export function buildIncrementalMessageEvent(input: {
+  conversationId: string;
+  delta: string;
+  mode?: CopilotMode;
+  lastEventId?: string;
+}): Record<string, unknown> {
+  return {
+    event: "send",
+    conversationId: input.conversationId,
+    content: [
+      {
+        type: "text",
+        text: input.delta,
+        isIncremental: true // NEW FLAG - tells server this is a delta, not full prompt
+      }
+    ],
+    mode: input.mode ?? "smart",
+    lastEventId: input.lastEventId || undefined
+  };
+}
+
+// MODIFY buildSendEvent to support incremental flag for backward compatibility
 export function buildSendEvent(input: {
   conversationId: string;
   prompt: string;
   mode: CopilotMode;
+  isIncremental?: boolean; // NEW PARAMETER - default false for backward compatibility
 }): Record<string, unknown> {
   return buildPromptEvent({
     event: "send",
     conversationId: input.conversationId,
     prompt: input.prompt,
-    mode: input.mode
+    mode: input.mode,
+    isIncremental: input.isIncremental || false // Default to false for backward compat
   });
 }
 
@@ -130,11 +155,13 @@ export function buildPongEvent(input: { pingId?: string; lastEventId?: string })
   };
 }
 
+// MODIFY internal helper to support incremental flag
 function buildPromptEvent(input: {
   event: "messagePreview" | "send";
   conversationId: string;
   prompt: string;
   mode: CopilotMode;
+  isIncremental?: boolean; // NEW PARAMETER - tells server to append only this delta
 }): Record<string, unknown> {
   return {
     event: input.event,
@@ -142,7 +169,8 @@ function buildPromptEvent(input: {
     content: [
       {
         type: "text",
-        text: input.prompt
+        text: input.prompt,
+        isIncremental: input.isIncremental || false // NEW FIELD - tells server to append only this delta
       }
     ],
     mode: input.mode

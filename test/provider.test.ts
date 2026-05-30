@@ -1,5 +1,11 @@
 import { describe, expect, test } from "vitest";
-import { PROVIDER_MODELS, promptForAccessToken, refreshPastedAccessToken, resolveCopilotMode } from "../src/provider.js";
+import {
+  normalizeAccessToken,
+  PROVIDER_MODELS,
+  promptForAccessToken,
+  refreshPastedAccessToken,
+  resolveCopilotMode
+} from "../src/provider.js";
 
 describe("provider", () => {
   test("registers a single Copilot model", () => {
@@ -32,6 +38,16 @@ describe("provider", () => {
     expect(credentials.expires).toBeGreaterThan(Date.now());
   });
 
+  test("normalizes pasted Bearer tokens during login", async () => {
+    const credentials = await promptForAccessToken({
+      onAuth: () => {},
+      onPrompt: async () => "Bearer secret-token"
+    });
+
+    expect(credentials.access).toBe("secret-token");
+    expect(credentials.refresh).toBe("secret-token");
+  });
+
   test("refresh keeps non-empty pasted tokens valid", async () => {
     const refreshed = await refreshPastedAccessToken({
       access: "secret-token",
@@ -42,5 +58,15 @@ describe("provider", () => {
     expect(refreshed.access).toBe("secret-token");
     expect(refreshed.refresh).toBe("secret-token");
     expect(refreshed.expires).toBeGreaterThan(Date.now());
+  });
+
+  test("normalizeAccessToken strips optional bearer/header wrappers", () => {
+    expect(normalizeAccessToken("Bearer abc")).toBe("abc");
+    expect(normalizeAccessToken("bearer    abc")).toBe("abc");
+    expect(normalizeAccessToken("Authorization: Bearer abc")).toBe("abc");
+    expect(normalizeAccessToken("'abc'" )).toBe("abc");
+    expect(normalizeAccessToken("\"abc\"")).toBe("abc");
+    expect(normalizeAccessToken("  abc  ")).toBe("abc");
+    expect(normalizeAccessToken("  ")).toBe("");
   });
 });

@@ -14,6 +14,9 @@ export interface CopilotConfig {
   traceFile?: string;
   origin: string;
   userAgent: string;
+  
+  // NEW: Feature flag for stateful WebSocket communication
+  enableStatefulMode?: boolean; // Default true - leverages server-side conversation state
 }
 
 export interface CopilotRequestConfig extends CopilotConfig {
@@ -40,6 +43,11 @@ export interface PersistedCopilotState {
   clientSessionId: string;
   accessTokenFingerprint?: string;
   updatedAt: string;
+
+  // NEW FIELDS - Minimal state for error recovery and session management (NOT full history)
+  lastEventId?: string;              // Last event ID from server for ordering/deduplication
+  hasSentInitialPrompt?: boolean;    // Track if initial system prompt was sent in this WebSocket session
+  estimatedContextTokens?: number;   // Locally estimated Copilot conversation context size
 }
 
 export interface CopilotInboundEvent {

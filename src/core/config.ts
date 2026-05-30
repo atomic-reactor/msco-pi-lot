@@ -8,6 +8,7 @@ const DEFAULTS = Object.freeze({
   apiVersion: "2",
   debug: false,
   trace: false,
+  enableStatefulMode: true,
   origin: "https://copilot.microsoft.com",
   userAgent:
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36 Edg/146.0.0.0"
@@ -57,6 +58,10 @@ export function loadConfig(options: LoadConfigOptions = {}): CopilotConfig {
     apiVersion: readEnv(env, "MICROSOFT_COPILOT_API_VERSION", "COPILOT_API_VERSION") || DEFAULTS.apiVersion,
     debug: parseBooleanFlag(readEnv(env, "MICROSOFT_COPILOT_DEBUG", "COPILOT_DEBUG"), DEFAULTS.debug),
     trace: parseBooleanFlag(readEnv(env, "MICROSOFT_COPILOT_TRACE", "COPILOT_TRACE"), DEFAULTS.trace),
+    enableStatefulMode: parseBooleanFlag(
+      readEnv(env, "MICROSOFT_COPILOT_ENABLE_STATEFUL_MODE", "COPILOT_ENABLE_STATEFUL_MODE"),
+      DEFAULTS.enableStatefulMode
+    ),
     traceFile: readEnv(env, "MICROSOFT_COPILOT_TRACE_FILE", "COPILOT_TRACE_FILE") || undefined,
     origin: DEFAULTS.origin,
     userAgent: DEFAULTS.userAgent
