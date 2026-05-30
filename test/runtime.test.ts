@@ -634,6 +634,76 @@ describe("session runtime", () => {
     expect(event.value.error.errorMessage).toContain("/login microsoft-copilot");
   });
 
+  test("resetForCompaction starts a fresh Copilot conversation on next request", async () => {
+    const sockets: MockSocket[] = [];
+    const persistedStates: PersistedStateSnapshot[] = [];
+    let nextConversationId = 2;
+
+    const runtime = new CopilotSessionRuntime(
+      { ...baseConfig, conversationId: "conv-1", clientSessionId: "client-1" },
+      "session-1",
+      {
+        version: 2,
+        sessionId: "session-1",
+        conversationId: "conv-1",
+        clientSessionId: "client-1",
+        hasSentInitialPrompt: true,
+        estimatedContextTokens: 321,
+        updatedAt: "2026-03-20T00:00:00.000Z"
+      },
+      (state) => {
+        persistedStates.push({
+          conversationId: state.conversationId,
+          clientSessionId: state.clientSessionId,
+          hasSentInitialPrompt: state.hasSentInitialPrompt,
+          estimatedContextTokens: state.estimatedContextTokens
+        });
+      },
+      {
+        fetchImpl: createFetchMock({
+          onConversationCreate: async () =>
+            new Response(JSON.stringify({ conversationId: `conv-${nextConversationId++}` }), {
+              status: 200,
+              headers: { "content-type": "application/json" }
+            })
+        }),
+        webSocketFactory: () => {
+          const socket = new MockSocket();
+          sockets.push(socket);
+          return socket as any;
+        }
+      }
+    );
+
+    runtime.resetForCompaction();
+
+    expect(persistedStates.at(-1)).toMatchObject({
+      conversationId: "",
+      hasSentInitialPrompt: false,
+      estimatedContextTokens: 0
+    });
+    expect(persistedStates.at(-1)?.clientSessionId).not.toBe("client-1");
+
+    const stream = await runtime.streamPrompt(model, "Hello after compact", accessToken);
+    const eventsPromise = collectEvents(stream);
+
+    await waitFor(() => {
+      expect(sockets).toHaveLength(1);
+      expect(sockets[0].sent.map((payload) => payload.event)).toEqual([
+        "setOptions",
+        "reportLocalConsents",
+        "messagePreview",
+        "send"
+      ]);
+    });
+
+    sockets[0].emit("message", JSON.stringify({ event: "appendText", id: "1", text: "Fresh conversation" }));
+    sockets[0].emit("message", JSON.stringify({ event: "done", id: "2" }));
+
+    await eventsPromise;
+    expect(persistedStates.at(-1)).toMatchObject({ conversationId: "conv-2" });
+  });
+
   test("rotating access tokens resets the persisted conversation and websocket", async () => {
     const sockets: MockSocket[] = [];
     const persistedStates: PersistedStateSnapshot[] = [];
@@ -701,4 +771,6 @@ interface PersistedStateSnapshot {
   conversationId: string;
   clientSessionId: string;
   accessTokenFingerprint?: string;
+  hasSentInitialPrompt?: boolean;
+  estimatedContextTokens?: number;
 }

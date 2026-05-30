@@ -59,6 +59,10 @@ export default function microsoftCopilotExtension(pi: ExtensionAPI): void {
   pi.on("session_tree", async (_event, ctx) => {
     reconstructState(sessionStore, runtimeManager, ctx);
   });
+  pi.on("session_compact", async (_event, ctx) => {
+    const sessionId = ctx.sessionManager.getSessionId();
+    runtimeManager.resetForCompaction(sessionId);
+  });
   pi.on("session_shutdown", async (_event, ctx) => {
     runtimeManager.disconnectSession(ctx.sessionManager.getSessionId());
   });

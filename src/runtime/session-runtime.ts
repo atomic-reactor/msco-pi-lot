@@ -142,6 +142,27 @@ export class CopilotSessionRuntime {
     this.inflight = false;
   }
 
+  resetForCompaction(): void {
+    this.transport?.disconnect(1000, "compaction-reset");
+    this.transport = null;
+    this.serverConfigPromise = null;
+    this.lastInboundEventId = undefined;
+    this.hasSentInitialPrompt = false;
+    this.estimatedContextTokens = 0;
+
+    this.state = {
+      ...this.state,
+      conversationId: "",
+      clientSessionId: generateClientSessionId(),
+      lastEventId: undefined,
+      hasSentInitialPrompt: false,
+      estimatedContextTokens: 0,
+      updatedAt: new Date().toISOString()
+    };
+
+    this.persistState(this.state);
+  }
+
   async streamPrompt(
     model: Model<any>,
     prompt: string,

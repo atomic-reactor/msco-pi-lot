@@ -1,6 +1,7 @@
 import type { Context, Model } from "@mariozechner/pi-ai";
 import type { CopilotConfig, CopilotMode, PersistedCopilotState } from "../types.js";
 import type { SessionTraceWriter } from "../core/session-trace.js";
+import { generateClientSessionId } from "../core/ids.js";
 import { CopilotSessionRuntime, type SessionRuntimeDependencies } from "./session-runtime.js";
 
 export class CopilotRuntimeManager {
@@ -24,6 +25,29 @@ export class CopilotRuntimeManager {
 
   disconnectSession(sessionId: string): void {
     this.runtimes.get(sessionId)?.disconnect();
+  }
+
+  resetForCompaction(sessionId: string): void {
+    const runtime = this.runtimes.get(sessionId);
+    if (runtime) {
+      runtime.resetForCompaction();
+      return;
+    }
+
+    const state = this.readState(sessionId);
+    if (!state) {
+      return;
+    }
+
+    this.persistState({
+      ...state,
+      conversationId: "",
+      clientSessionId: generateClientSessionId(),
+      lastEventId: undefined,
+      hasSentInitialPrompt: false,
+      estimatedContextTokens: 0,
+      updatedAt: new Date().toISOString()
+    });
   }
 
   async streamSimple(sessionId: string, model: Model<any>, prompt: string, signal?: AbortSignal) {
