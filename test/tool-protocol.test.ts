@@ -35,6 +35,9 @@ describe("tool protocol", () => {
     expect(prompt).toContain("Read package.json");
     expect(prompt).toContain('"responseType":"toolCalls"');
     expect(prompt).not.toContain("SYSTEM PROMPT");
+    expect(built.incrementalPrompt).toContain("TASK");
+    expect(built.incrementalPrompt).toContain("Read package.json");
+    expect(built.incrementalPrompt).not.toContain("AVAILABLE TOOLS");
   });
 
   test("keeps only compact workspace context from the inherited system prompt", () => {

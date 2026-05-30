@@ -21,6 +21,7 @@ export interface ToolPromptMetadata {
 
 export interface BuiltToolPrompt {
   prompt: string;
+  incrementalPrompt: string;
   metadata: ToolPromptMetadata;
 }
 
@@ -71,8 +72,10 @@ export function buildToolPrompt(context: Context, options: ToolPromptOptions = {
   ].filter(Boolean);
 
   const prompt = truncateText(sections.join("\n\n"), limits.maxPromptChars);
+  const incrementalPrompt = truncateText(currentTurn.text, limits.maxConversationChars);
   return {
     prompt,
+    incrementalPrompt,
     metadata: {
       kind,
       promptChars: prompt.length,
@@ -104,6 +107,7 @@ export function buildRepairPrompt(
   const prompt = truncateText(`${basePrompt}\n\n${repairTail}`, limits.maxPromptChars);
   return {
     prompt,
+    incrementalPrompt: prompt,
     metadata: {
       kind: "repair",
       promptChars: prompt.length,

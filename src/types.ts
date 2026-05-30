@@ -47,6 +47,7 @@ export interface PersistedCopilotState {
   // NEW FIELDS - Minimal state for error recovery and session management (NOT full history)
   lastEventId?: string;              // Last event ID from server for ordering/deduplication
   hasSentInitialPrompt?: boolean;    // Track if initial system prompt was sent in this WebSocket session
+  estimatedContextTokens?: number;   // Locally estimated Copilot conversation context size
 }
 
 export interface CopilotInboundEvent {

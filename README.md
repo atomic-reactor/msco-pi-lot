@@ -29,7 +29,7 @@ For interactive use, log in once from inside `pi`:
 /login microsoft-copilot
 ```
 
-Paste your Microsoft Copilot access token when prompted. `pi` stores the credential in `~/.pi/agent/auth.json`. You can remove it later with:
+Paste your Microsoft Copilot access token when prompted. You can paste either the raw token or a full `Bearer <token>` string; the extension normalizes it automatically. `pi` stores the credential in `~/.pi/agent/auth.json`. You can remove it later with:
 
 ```text
 /logout microsoft-copilot

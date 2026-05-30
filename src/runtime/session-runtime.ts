@@ -64,6 +64,7 @@ export class CopilotSessionRuntime {
 
   // NEW FIELDS - Track message sequence and state for incremental protocol (TECHNICAL_SPEC.md Section 3)
   private hasSentInitialPrompt = false;      // Has this WebSocket session received initial prompt?
+  private estimatedContextTokens = 0;
 
   constructor(
     private readonly config: CopilotConfig,
@@ -86,6 +87,7 @@ export class CopilotSessionRuntime {
     if (persistedState) {
       this.hasSentInitialPrompt = persistedState.hasSentInitialPrompt || false;
       this.lastInboundEventId = persistedState.lastEventId || undefined;
+      this.estimatedContextTokens = Math.max(0, persistedState.estimatedContextTokens || 0);
     }
   }
   updatePersistedState(persistedState: PersistedCopilotState | undefined): void {
@@ -96,7 +98,8 @@ export class CopilotSessionRuntime {
     // Restore state from persisted data (TECHNICAL_SPEC.md Section 3C)
     this.hasSentInitialPrompt = persistedState.hasSentInitialPrompt || false;
     this.lastInboundEventId = persistedState.lastEventId || undefined;
-    
+    this.estimatedContextTokens = Math.max(0, persistedState.estimatedContextTokens || 0);
+
     // Update active fingerprint if token changed
     this.activeAccessTokenFingerprint = persistedState.accessTokenFingerprint;
   }
@@ -111,23 +114,32 @@ export class CopilotSessionRuntime {
     }
   }
 
-  async resetInitialPromptFlag(): Promise<void> {
-    this.hasSentInitialPrompt = false;
-    
-    // Persist to state store if version 2
+  private setInitialPromptSent(sent: boolean): void {
+    this.hasSentInitialPrompt = sent;
+
     if (this.state.version === 2) {
-      this.state.hasSentInitialPrompt = false;
+      this.state.hasSentInitialPrompt = sent;
       this.persistState(this.state);
     }
+  }
+
+  private setEstimatedContextTokens(tokens: number): void {
+    this.estimatedContextTokens = Math.max(0, Math.floor(tokens));
+
+    if (this.state.version === 2) {
+      this.state.estimatedContextTokens = this.estimatedContextTokens;
+      this.persistState(this.state);
+    }
+  }
+
+  async resetInitialPromptFlag(): Promise<void> {
+    this.setInitialPromptSent(false);
   }
   
   disconnect(): void {
     this.transport?.disconnect(1000, "session-switch");
     this.transport = null;
     this.inflight = false;
-    
-    // Reset state on disconnect so next connection can send full prompt (TECHNICAL_SPEC.md Section 3D)
-    this.hasSentInitialPrompt = false;
   }
 
   async streamPrompt(
@@ -171,10 +183,14 @@ export class CopilotSessionRuntime {
     await this.prepareForAccessToken(accessToken);
     const serverConfig = await this.getServerConfig(accessToken);
     const builtPrompt = buildToolPrompt(context, { maxPromptChars: getPromptBudget(serverConfig.maxTextMessageLength) });
-    this.dependencies.traceWriter?.write("prompt.built", builtPrompt.metadata);
+    this.dependencies.traceWriter?.write("prompt.built", {
+      ...builtPrompt.metadata,
+      incrementalPromptChars: builtPrompt.incrementalPrompt.length
+    });
     return this.startRequest({
       model,
       prompt: builtPrompt.prompt,
+      incrementalPrompt: builtPrompt.incrementalPrompt,
       copilotMode: mode,
       accessToken,
       abortSignal,
@@ -190,6 +206,7 @@ export class CopilotSessionRuntime {
     abortSignal?: AbortSignal;
     mode: ResponseHandlingMode;
     policy?: RequestPolicy;
+    incrementalPrompt?: string;
   }): Promise<AssistantMessageEventStream> {
     const stream = createAssistantMessageEventStream();
 
@@ -238,7 +255,8 @@ export class CopilotSessionRuntime {
       input.accessToken,
       input.mode,
       input.abortSignal,
-      policy
+      policy,
+      input.incrementalPrompt
     );
     return stream;
   }
@@ -251,7 +269,8 @@ export class CopilotSessionRuntime {
     accessToken: string,
     responseHandlingMode: ResponseHandlingMode,
     abortSignal: AbortSignal | undefined,
-    policy: RequestPolicy
+    policy: RequestPolicy,
+    incrementalPrompt: string | undefined
   ): Promise<void> {
     let aborted = false;
     let removeAbortListener: (() => void) | undefined;
@@ -293,6 +312,9 @@ export class CopilotSessionRuntime {
 
       const { conversationId } = await this.ensureSession(accessToken);
       const transport = await this.ensureConnected(accessToken);
+
+      let requestInputTokens = 0;
+      let contextTokensBeforeResponse = this.estimatedContextTokens;
 
       const partial = createAssistantMessage(model, "stop", []);
       const textContent = { type: "text" as const, text: "" };
@@ -447,17 +469,26 @@ export class CopilotSessionRuntime {
             return;
           }
           completed = true;
+          const outputTokens = estimateTextTokens(parsed.text);
+          const estimatedContextTokens = contextTokensBeforeResponse + outputTokens;
+          this.setEstimatedContextTokens(estimatedContextTokens);
           emitFinalText(stream, partial, parsed.text);
           stream.push({
             type: "done",
             reason: "stop",
-            message: createAssistantMessage(model, "stop", [{ type: "text", text: parsed.text }])
+            message: createAssistantMessage(model, "stop", [{ type: "text", text: parsed.text }], undefined, {
+              input: contextTokensBeforeResponse,
+              output: outputTokens
+            })
           });
           settleCompletion();
           return;
         }
 
         completed = true;
+        const rawOutputTokens = estimateTextTokens(rawText);
+        const estimatedContextTokens = contextTokensBeforeResponse + rawOutputTokens;
+        this.setEstimatedContextTokens(estimatedContextTokens);
         partial.content = parsed.toolCalls;
         stream.push({ type: "start", partial });
         parsed.toolCalls.forEach((toolCall, contentIndex) => {
@@ -467,7 +498,10 @@ export class CopilotSessionRuntime {
         stream.push({
           type: "done",
           reason: "toolUse",
-          message: createAssistantMessage(model, "toolUse", parsed.toolCalls)
+          message: createAssistantMessage(model, "toolUse", parsed.toolCalls, undefined, {
+            input: contextTokensBeforeResponse,
+            output: rawOutputTokens
+          })
         });
         settleCompletion();
       };
@@ -484,11 +518,17 @@ export class CopilotSessionRuntime {
 
         completed = true;
         cleanup();
+        const outputTokens = estimateTextTokens(textContent.text);
+        const estimatedContextTokens = contextTokensBeforeResponse + outputTokens;
+        this.setEstimatedContextTokens(estimatedContextTokens);
         emitFinalText(stream, partial, textContent.text, started);
         stream.push({
           type: "done",
           reason: "stop",
-          message: createAssistantMessage(model, "stop", [{ type: "text", text: textContent.text }])
+          message: createAssistantMessage(model, "stop", [{ type: "text", text: textContent.text }], undefined, {
+            input: contextTokensBeforeResponse,
+            output: outputTokens
+          })
         });
         settleCompletion();
       };
@@ -541,15 +581,6 @@ export class CopilotSessionRuntime {
       };
 
       const onClose = (event: { code: number; reason: string }) => {
-        // Reset initial prompt flag on abnormal closure so next connection can send full prompt
-        if (!completed && event.code !== 1000 && !aborted) {
-          this.hasSentInitialPrompt = false;
-          if (this.state.version === 2) {
-            this.state.hasSentInitialPrompt = false;
-            this.persistState(this.state);
-          }
-        }
-        
         if (!completed) {
           fail(aborted ? "aborted" : "error", aborted ? "Request was aborted" : "Socket closed mid-response");
         }
@@ -566,6 +597,8 @@ export class CopilotSessionRuntime {
 
       if (!useStatefulMode) {
         // Feature flag disabled: Always send full prompt (backward compatible behavior)
+        requestInputTokens = estimateTextTokens(prompt);
+        contextTokensBeforeResponse = requestInputTokens;
         transport.sendJson(buildMessagePreviewEvent({ conversationId, prompt }));
         transport.sendJson(buildSendEvent({
           conversationId,
@@ -576,6 +609,8 @@ export class CopilotSessionRuntime {
       } else if (isFirstMessageInSession) {
         // First message in session: Send full prompt with system context
         // Server stores this and maintains conversation state
+        requestInputTokens = estimateTextTokens(prompt);
+        contextTokensBeforeResponse = requestInputTokens;
         transport.sendJson(buildMessagePreviewEvent({ conversationId, prompt }));
         transport.sendJson(buildSendEvent({
           conversationId,
@@ -583,18 +618,17 @@ export class CopilotSessionRuntime {
           mode: copilotMode || this.config.mode,
           isIncremental: false // Explicitly send as full prompt
         }));
-        
-        // Mark that we've sent the initial prompt in this session
-        this.hasSentInitialPrompt = true;
-        if (this.state.version === 2) {
-          this.state.hasSentInitialPrompt = true;
-          this.persistState(this.state);
-        }
+
+        // Mark that we've sent the initial prompt in this conversation
+        this.setInitialPromptSent(true);
       } else {
-        // Subsequent message: Send only delta (server already has conversation context)
+        // Subsequent message: Send only current-turn delta (server already has conversation context)
+        const deltaPrompt = incrementalPrompt || prompt;
+        requestInputTokens = estimateTextTokens(deltaPrompt);
+        contextTokensBeforeResponse = this.estimatedContextTokens + requestInputTokens;
         transport.sendJson(buildIncrementalMessageEvent({
           conversationId,
-          delta: prompt,
+          delta: deltaPrompt,
           lastEventId: this.lastInboundEventId
         }));
       }
@@ -625,18 +659,25 @@ export class CopilotSessionRuntime {
   private async recreateConversation(accessToken: string): Promise<void> {
     this.transport?.disconnect(1000, "recreate-conversation");
     this.transport = null;
+    this.estimatedContextTokens = 0;
     this.state = {
       ...this.state,
       conversationId: await this.createConversationService(accessToken).createConversation(),
-      updatedAt: new Date().toISOString()
+      updatedAt: new Date().toISOString(),
+      hasSentInitialPrompt: false,
+      estimatedContextTokens: 0
     };
     this.persistState(this.state);
   }
 
   private async ensureSession(accessToken: string): Promise<EnsureSessionResult> {
     if (!this.state.conversationId) {
+      this.estimatedContextTokens = 0;
       this.state.conversationId = await this.createConversationService(accessToken).createConversation();
+      this.state.hasSentInitialPrompt = false;
+      this.state.estimatedContextTokens = 0;
       this.persistState(this.state);
+      this.hasSentInitialPrompt = false;
     }
 
     return {
@@ -657,9 +698,6 @@ export class CopilotSessionRuntime {
 
     if (!this.transport.isConnected) {
       await this.transport.connect();
-      
-      // Reset initial prompt flag on reconnection so we can send full prompt again (TECHNICAL_SPEC.md Section 3D)
-      await this.resetInitialPromptFlag();
       this.transport.sendJson(buildSetOptionsEvent());
       this.transport.sendJson(buildReportLocalConsentsEvent());
     }
@@ -721,12 +759,15 @@ export class CopilotSessionRuntime {
     this.serverConfigPromise = null;
     this.lastInboundEventId = undefined;
 
+    this.estimatedContextTokens = 0;
     this.state = {
       ...this.state,
       version: 2,
       conversationId: "",
       clientSessionId: generateClientSessionId(),
       accessTokenFingerprint: nextFingerprint,
+      hasSentInitialPrompt: false,
+      estimatedContextTokens: 0,
       updatedAt: new Date().toISOString()
     };
     this.activeAccessTokenFingerprint = nextFingerprint;
@@ -769,8 +810,13 @@ function createAssistantMessage(
   model: Model<any>,
   stopReason: "stop" | "toolUse" | "error" | "aborted",
   content: AssistantMessage["content"],
-  errorMessage?: string
+  errorMessage?: string,
+  usageOverride?: { input?: number; output?: number }
 ): AssistantMessage {
+  const input = Math.max(0, Math.floor(usageOverride?.input || 0));
+  const output = Math.max(0, Math.floor(usageOverride?.output || 0));
+  const totalTokens = input + output;
+
   return {
     role: "assistant",
     content,
@@ -780,11 +826,11 @@ function createAssistantMessage(
     stopReason,
     errorMessage,
     usage: {
-      input: 0,
-      output: 0,
+      input,
+      output,
       cacheRead: 0,
       cacheWrite: 0,
-      totalTokens: 0,
+      totalTokens,
       cost: {
         input: 0,
         output: 0,
@@ -795,6 +841,15 @@ function createAssistantMessage(
     },
     timestamp: Date.now()
   };
+}
+
+function estimateTextTokens(text: string): number {
+  if (!text?.trim()) {
+    return 0;
+  }
+
+  const normalizedLength = text.trim().length;
+  return Math.max(1, Math.ceil(normalizedLength / 4));
 }
 
 function truncateForTransport(value: string, maxChars: number): string {
