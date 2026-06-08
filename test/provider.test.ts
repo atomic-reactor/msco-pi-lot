@@ -69,4 +69,11 @@ describe("provider", () => {
     expect(normalizeAccessToken("  abc  ")).toBe("abc");
     expect(normalizeAccessToken("  ")).toBe("");
   });
+
+  test("normalizeAccessToken accepts copied headers, curl snippets, and token JSON", () => {
+    expect(normalizeAccessToken('-H "Authorization: Bearer copied-token"')).toBe("copied-token");
+    expect(normalizeAccessToken('{"access_token":"json-token"}')).toBe("json-token");
+    expect(normalizeAccessToken('{"access":"Bearer nested-token"}')).toBe("nested-token");
+    expect(normalizeAccessToken("raw-token,")).toBe("raw-token");
+  });
 });

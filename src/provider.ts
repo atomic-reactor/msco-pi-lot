@@ -109,8 +109,35 @@ export function normalizeAccessToken(token: string | undefined): string {
     return "";
   }
 
-  const withoutHeaderName = trimmed.replace(/^authorization\s*:\s*/i, "").trim();
-  const withoutBearer = withoutHeaderName.replace(/^bearer\s+/i, "").trim();
-  const withoutQuotes = withoutBearer.replace(/^['"]|['"]$/g, "").trim();
-  return withoutQuotes;
+  const parsedToken = extractTokenFromJson(trimmed);
+  if (parsedToken) {
+    return normalizeAccessToken(parsedToken);
+  }
+
+  const embeddedBearer = trimmed.match(/(?:authorization\s*:\s*)?bearer\s+([A-Za-z0-9._~+/=-]+)/i);
+  if (embeddedBearer?.[1]) {
+    return embeddedBearer[1].trim();
+  }
+
+  return trimmed
+    .replace(/^authorization\s*:\s*/i, "")
+    .replace(/^bearer\s+/i, "")
+    .replace(/^[\'"]|[\'",;]$/g, "")
+    .trim();
+}
+
+function extractTokenFromJson(input: string): string | undefined {
+  try {
+    const parsed = JSON.parse(input) as Record<string, unknown>;
+    for (const key of ["access", "accessToken", "access_token", "token", "bearerToken", "bearer_token"]) {
+      const value = parsed[key];
+      if (typeof value === "string" && value.trim()) {
+        return value;
+      }
+    }
+  } catch {
+    // Not JSON; fall through to header/string parsing.
+  }
+
+  return undefined;
 }
