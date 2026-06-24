@@ -151,7 +151,7 @@ export class CopilotSessionRuntime {
     if (!accessToken?.trim()) {
       return createImmediateErrorStream(
         model,
-        "Microsoft Copilot is not logged in. Run /login microsoft-copilot or set MICROSOFT_COPILOT_ACCESS_TOKEN."
+        "Microsoft Copilot is not logged in. Run /login and select Microsoft Copilot, or set MICROSOFT_COPILOT_ACCESS_TOKEN."
       );
     }
 
@@ -176,7 +176,7 @@ export class CopilotSessionRuntime {
     if (!accessToken?.trim()) {
       return createImmediateErrorStream(
         model,
-        "Microsoft Copilot is not logged in. Run /login microsoft-copilot or set MICROSOFT_COPILOT_ACCESS_TOKEN."
+        "Microsoft Copilot is not logged in. Run /login and select Microsoft Copilot, or set MICROSOFT_COPILOT_ACCESS_TOKEN."
       );
     }
 

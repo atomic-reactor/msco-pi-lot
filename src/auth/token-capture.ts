@@ -1,4 +1,6 @@
 import type { OAuthLoginCallbacks } from "@mariozechner/pi-ai";
+import os from "node:os";
+import path from "node:path";
 
 /**
  * Extracts a Microsoft Copilot access token from a wide variety of user-provided inputs.
@@ -120,38 +122,175 @@ export async function attemptBrowserTokenCapture(callbacks: LoginCallbacks): Pro
     playwright = await import("playwright");
   } catch (err: any) {
     callbacks.onProgress?.(
-      "Playwright not installed. For automatic login run: npm install playwright && npx playwright install chromium"
+      "Playwright not installed. Run: npm install playwright && npx playwright install msedge (or chromium)"
     );
     return null;
   }
 
   const { chromium } = playwright;
 
-  callbacks.onProgress?.("Launching browser for Microsoft Copilot authentication...");
-  callbacks.onAuth?.({
-    url: "https://copilot.microsoft.com",
-    instructions:
-      "A browser window will open (or is opening). Sign in to Microsoft Copilot if needed, then open or start a chat. The token will be captured automatically."
-  });
+  const cdpUrl = process.env.MICROSOFT_COPILOT_CDP_URL ||
+    (process.env.MICROSOFT_COPILOT_ATTACH_TO_RUNNING_BROWSER ? "http://localhost:9222" : null);
 
-  const browser = await chromium.launch({
-    headless: false, // Headed so user can complete login / 2FA / consent
-    channel: undefined, // default bundled chromium; user can have chrome too
-    args: [
-      "--disable-blink-features=AutomationControlled",
-      "--no-default-browser-check"
-    ]
-  });
+  const usingAttach = !!cdpUrl;
 
-  const context = await browser.newContext({
-    userAgent:
-      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0",
-    viewport: { width: 1280, height: 900 }
-  });
+  if (usingAttach) {
+    callbacks.onProgress?.("Attach mode requested (CDP). To use the regular Playwright launch instead, unset MICROSOFT_COPILOT_CDP_URL and MICROSOFT_COPILOT_ATTACH_TO_RUNNING_BROWSER.");
+  }
 
-  const page = await context.newPage();
+  callbacks.onProgress?.(
+    usingAttach
+      ? "Attaching to your running browser for Microsoft Copilot authentication..."
+      : "Launching browser for Microsoft Copilot authentication..."
+  );
+
+  // Determine which browser to use.
+  // By default we try to launch your real Edge if possible.
+  // Set MICROSOFT_COPILOT_BROWSER_CHANNEL=chrome or leave undefined to use bundled Chromium.
+  const requestedChannel = process.env.MICROSOFT_COPILOT_BROWSER_CHANNEL || "msedge";
+  const useRealProfile = process.env.MICROSOFT_COPILOT_USE_REAL_PROFILE === "1";
+
+  let browser: any;
+  let context: any;
+  let page: any;
+  let isCdpConnection = false;
+
+  const commonArgs = [
+    "--disable-blink-features=AutomationControlled",
+    "--no-default-browser-check"
+  ];
+
+  const commonUserAgent =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0";
+
+  if (cdpUrl) {
+    callbacks.onProgress?.(`Connecting to your running browser at ${cdpUrl}...`);
+    try {
+      browser = await chromium.connectOverCDP(cdpUrl);
+      isCdpConnection = true;
+
+      const contexts = browser.contexts();
+      // Prefer a context that already has a Copilot page
+      let targetContext = contexts.find((c: any) =>
+        c.pages().some((p: any) => p.url().includes("copilot.microsoft.com"))
+      ) || contexts[0];
+
+      if (!targetContext) {
+        targetContext = await browser.newContext();
+      }
+
+      // Reuse existing Copilot tab if present (non-destructive)
+      const existingCopilotPage = targetContext.pages().find((p: any) =>
+        p.url().includes("copilot.microsoft.com")
+      );
+
+      if (existingCopilotPage) {
+        page = existingCopilotPage;
+        callbacks.onProgress?.("Found open Copilot tab in your browser. Attaching listeners...");
+      } else {
+        page = await targetContext.newPage();
+        callbacks.onProgress?.("Opening a new Copilot tab in your running browser...");
+      }
+
+      // We deliberately do NOT call onAuth here in attach mode, because pi's
+      // reaction to onAuth can open an extra browser/window. We are already
+      // controlling a page in the running browser.
+      // callbacks.onAuth?.({ url: ..., instructions: ... });
+    } catch (err: any) {
+      const msg = err?.message || String(err);
+      callbacks.onProgress?.(
+        `Could not connect to running browser at ${cdpUrl} (${msg}). ` +
+        "Falling back to launching a new window. " +
+        "Make sure you started Edge/Chrome with: open -a \"Microsoft Edge\" --args --remote-debugging-port=9222"
+      );
+    }
+  }
+
+  if (!page) {
+    if (usingAttach) {
+      // Attach mode was requested. We either got a page from the running browser above,
+      // or the connect failed. In either case, do not auto-launch a fresh browser window.
+      // The user explicitly wanted to reuse their existing session.
+      callbacks.onProgress?.("Attach-to-running-browser mode active — skipping fresh browser launch.");
+      // Return early so we don't fall into any later launch or navigation that could open more.
+      return null;
+    } else {
+      callbacks.onAuth?.({
+        url: "https://copilot.microsoft.com",
+        instructions:
+          "A browser window will open using Microsoft Edge (if available). Sign in if needed. Once the main interface loads, a background request will carry your token."
+      });
+
+      callbacks.onProgress?.(
+        `Launching ${requestedChannel === "msedge" ? "Microsoft Edge" : requestedChannel || "Chromium"}...`
+      );
+
+      const edgeProfilePath = path.join(
+        os.homedir(),
+        "Library",
+        "Application Support",
+        "Microsoft Edge",
+        "Default"
+      );
+
+      if (useRealProfile) {
+        // Try to reuse your actual Edge profile (cookies, logins, etc.).
+        // This only works well if your main Edge is closed.
+        callbacks.onProgress?.(`Attempting to reuse your real Edge profile...`);
+        try {
+          context = await chromium.launchPersistentContext(edgeProfilePath, {
+            channel: requestedChannel,
+            headless: false,
+            args: commonArgs,
+          });
+          browser = context.browser();
+        } catch (err: any) {
+          callbacks.onProgress?.(
+            `Failed to open real Edge profile (${err?.message || err}). ` +
+            `Your main Edge may be running, or permissions are an issue. Falling back to a fresh window.`
+          );
+        }
+      }
+
+      if (!context) {
+        // Fresh launch (either by choice or because persistent failed).
+        // Using channel 'msedge' will open your installed Microsoft Edge instead of bundled Chromium.
+        browser = await chromium.launch({
+          headless: false,
+          channel: requestedChannel,
+          args: commonArgs,
+        });
+        context = await browser.newContext({
+          userAgent: commonUserAgent,
+          viewport: { width: 1280, height: 900 }
+        });
+      }
+
+      page = await context.newPage();
+    }
+  }
+
+  if (!page) {
+    // No page was obtained. This happens in attach mode when connect failed.
+    // Return null so loginWithBestEffort falls through to the manual prompt
+    // instead of crashing on page.on(...) or navigation.
+    return null;
+  }
 
   let capturedToken: string | null = null;
+  let resolveCaptured: ((token: string) => void) | null = null;
+  const tokenPromise = new Promise<string>((resolve) => {
+    resolveCaptured = resolve;
+  });
+
+  function setCaptured(tok: string, message: string) {
+    if (capturedToken) return;
+    capturedToken = cleanToken(tok);
+    callbacks.onProgress?.(message);
+    if (resolveCaptured) {
+      resolveCaptured(capturedToken);
+    }
+  }
 
   // Listen for WebSocket connections (primary way the token is used)
   page.on("websocket", (ws) => {
@@ -161,14 +300,15 @@ export async function attemptBrowserTokenCapture(callbacks: LoginCallbacks): Pro
       if (m) {
         const tok = decodeURIComponent(m[1]);
         if (tok && tok.length > 20) {
-          capturedToken = cleanToken(tok);
-          callbacks.onProgress?.("Captured access token from WebSocket connection.");
+          setCaptured(tok, "Captured access token from WebSocket connection.");
         }
       }
     }
   });
 
-  // Also listen to normal requests for Authorization headers (conversation create, config)
+  // Listen to normal requests for Authorization headers.
+  // The /c/api/conversations?types=... request is especially useful because it fires
+  // automatically on page load once you're signed in (no chat needed).
   page.on("request", (req) => {
     const url = req.url();
     if (!url.includes("copilot.microsoft.com")) return;
@@ -177,8 +317,10 @@ export async function attemptBrowserTokenCapture(callbacks: LoginCallbacks): Pro
     if (auth && /^bearer\s+/i.test(auth)) {
       const tok = auth.replace(/^bearer\s+/i, "").trim();
       if (tok.length > 20) {
-        capturedToken = cleanToken(tok);
-        callbacks.onProgress?.("Captured access token from Authorization header.");
+        const msg = url.includes("/c/api/conversations")
+          ? "Captured access token from the conversations list request (automatic on load)."
+          : "Captured access token from Authorization header.";
+        setCaptured(tok, msg);
       }
     }
 
@@ -186,27 +328,45 @@ export async function attemptBrowserTokenCapture(callbacks: LoginCallbacks): Pro
     if (url.includes("accessToken=")) {
       const m = url.match(/[?&]accessToken=([^&]+)/);
       if (m) {
-        capturedToken = cleanToken(decodeURIComponent(m[1]));
-        callbacks.onProgress?.("Captured access token from request URL.");
+        setCaptured(m[1], "Captured access token from request URL.");
       }
     }
   });
 
   try {
-    callbacks.onProgress?.("Navigating to https://copilot.microsoft.com ...");
-    await page.goto("https://copilot.microsoft.com", {
-      waitUntil: "domcontentloaded",
-      timeout: 45000
-    });
+    // Only navigate if we don't already have a loaded Copilot page from an existing tab (CDP mode)
+    const alreadyOnCopilot = page.url().includes("copilot.microsoft.com");
+    if (!alreadyOnCopilot) {
+      callbacks.onProgress?.("Navigating to https://copilot.microsoft.com ...");
+      await page.goto("https://copilot.microsoft.com", {
+        waitUntil: "domcontentloaded",
+        timeout: 45000
+      });
+    } else {
+      callbacks.onProgress?.("Using existing Copilot page. You can interact or refresh the tab to trigger capture if needed.");
+    }
 
-    callbacks.onProgress?.(
-      "Waiting for you to sign in (if required) and start a chat. Token will be captured from the live session."
-    );
+    if (!page.url().includes("copilot.microsoft.com")) {
+      callbacks.onProgress?.(
+        "Waiting for the initial conversations load. When signed in, Copilot automatically requests your conversation list — this is where we grab the Bearer token."
+      );
+    }
 
-    // Poll for capture or user action. Give generous time for login + first interaction.
+    // Wait for capture (instant via promise when a listener fires) or user action.
+    // The conversations list request often provides the token automatically once signed in.
     const start = Date.now();
     const maxWait = 1000 * 60 * 4; // 4 minutes is generous for MFA etc.
 
+    const timeoutPromise = new Promise<void>((resolve) => {
+      setTimeout(resolve, maxWait);
+    });
+
+    await Promise.race([
+      tokenPromise,
+      timeoutPromise
+    ]);
+
+    // Fallback polling only if we haven't captured yet (for the locator hint and abort check)
     while (!capturedToken && Date.now() - start < maxWait) {
       if (callbacks.signal?.aborted) break;
 
@@ -219,12 +379,12 @@ export async function attemptBrowserTokenCapture(callbacks: LoginCallbacks): Pro
             .isVisible({ timeout: 500 })
             .catch(() => false);
           if (hasChat && !capturedToken) {
-            callbacks.onProgress?.("Chat interface detected. Send a test message or just wait — background connections often reveal the token.");
+            callbacks.onProgress?.("Chat interface visible. The token is often captured earlier from the automatic conversations list request — waiting...");
           }
         } catch {}
       }
 
-      await page.waitForTimeout(800);
+      await page.waitForTimeout(250);
     }
 
     if (capturedToken) {
@@ -237,7 +397,15 @@ export async function attemptBrowserTokenCapture(callbacks: LoginCallbacks): Pro
   } finally {
     // Give a moment for final events
     await new Promise((r) => setTimeout(r, 300));
-    await browser.close().catch(() => {});
+    if (!isCdpConnection) {
+      try {
+        if (context && useRealProfile) {
+          await context.close();
+        } else if (browser) {
+          await browser.close();
+        }
+      } catch {}
+    }
   }
 
   return capturedToken ? cleanToken(capturedToken) : null;
@@ -284,19 +452,18 @@ export async function loginWithBestEffort(callbacks: LoginCallbacks): Promise<OA
     "",
     "1. In your browser go to https://copilot.microsoft.com and make sure you're signed in.",
     "2. Open DevTools (F12) → Network tab.",
-    "3. In the filter box type: copilot or chat or accessToken",
-    "4. Start or continue a chat.",
-    "5. Find a request to /c/api/... or the WebSocket (wss://copilot.microsoft.com/...)",
-    "   - Copy the request URL (it will contain accessToken=...)",
-    "   - OR right-click → Copy → Copy as fetch / Copy request headers",
-    "6. Come back here and paste the URL, the whole curl/fetch, the header, or just the raw token.",
+    "3. In the filter box type: copilot or conversations or accessToken",
+    "4. Just let the page load (or refresh). The key request is GET /c/api/conversations?types=... — it fires automatically and carries the Bearer token.",
+    "5. Find that request (or any other /c/api request or the WebSocket).",
+    "   - Copy the request URL, or right-click → Copy → Copy as fetch / Copy request headers",
+    "6. Come back here and paste the URL, the whole curl/fetch, the header block, or just the raw token.",
     "",
-    "You can also paste a full copied network request. We will extract the token automatically."
+    "We will extract the token automatically from almost anything you paste."
   ].join("\n");
 
   const raw = await callbacks.onPrompt({
-    message: "Paste Microsoft Copilot access token / URL / curl / fetch block:",
-    placeholder: "https://copilot...accessToken=... or Bearer ... or raw token",
+    message: "Paste Microsoft Copilot access token / URL / curl / fetch block (the /conversations request works great):",
+    placeholder: "https://copilot.../conversations?types=... or Authorization: Bearer ...",
     allowEmpty: false
   });
 

@@ -14,7 +14,7 @@ This document captures what was implemented + everything still on the table (as 
    - Users can literally "Copy → Copy as fetch" or copy the WS URL from Network tab and paste the whole thing.
 
 2. **Playwright-driven automatic capture** inside the OAuth `login()` handler
-   - `/login microsoft-copilot` → launches a real (headed) browser
+   - bare `/login` then select Microsoft Copilot from menu → triggers our OAuth login (which can launch/attach browser)
    - Listens for WebSocket connections + HTTP requests on copilot.microsoft.com
    - Grabs the token the moment the page makes an authenticated call
    - Progress feedback via the pi login UI
@@ -68,7 +68,8 @@ npx playwright install chromium
 pi -e ./src/index.ts
 
 # in pi
-/login microsoft-copilot
+/login
+# then select "Microsoft Copilot" from the OAuth selector
 ```
 
 Set `MICROSOFT_COPILOT_TRACE=1` + trace file to watch what tokens/headers are sent.

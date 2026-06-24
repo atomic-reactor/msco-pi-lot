@@ -65,7 +65,7 @@ export async function refreshPastedAccessToken(credentials: OAuthCredentials): P
   const refresh = normalizeAccessToken(credentials.refresh || credentials.access);
 
   if (!access) {
-    throw new Error("Microsoft Copilot token is missing. Run /login microsoft-copilot again.");
+    throw new Error("Microsoft Copilot token is missing. Run /login and select Microsoft Copilot (or set MICROSOFT_COPILOT_ACCESS_TOKEN).");
   }
 
   return {
