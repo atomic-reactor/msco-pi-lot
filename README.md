@@ -29,15 +29,40 @@ For interactive use, log in once from inside `pi`:
 /login microsoft-copilot
 ```
 
-Paste your Microsoft Copilot access token when prompted. You can paste either the raw token or a full `Bearer <token>` string; the extension normalizes it automatically. `pi` stores the credential in `~/.pi/agent/auth.json`. You can remove it later with:
+**New improved experience**:
+
+- The login flow will attempt to **automatically capture** your token by launching a browser and sniffing the live session (requires `playwright`).
+- If Playwright is not installed it falls back gracefully.
+- You can paste **almost anything**: raw token, `Bearer xxx`, full `wss://...accessToken=...` URL, cURL command, `fetch(...)` snippet, or a JSON payload. It extracts the token for you.
+
+After login `pi` stores the credential in `~/.pi/agent/auth.json`. Remove it with:
 
 ```text
 /logout microsoft-copilot
 ```
 
+To enable the automatic browser capture (recommended):
+
+```bash
+# after pi install
+npm install playwright   # (or it may be pulled via optionalDependencies)
+npx playwright install chromium
+```
+
+Then just `/login microsoft-copilot`. A browser window appears — complete sign-in and use Copilot briefly. The token is captured automatically from live connections.
+
+Force the old paste-only flow:
+
+```bash
+MICROSOFT_COPILOT_AUTH_MODE=manual pi ...
+# or export it
+```
+
 ## Configuration
 
-Interactive login only supports pasting an access token. For headless or non-interactive use, you can still set Copilot credentials in your shell or in a local `.env` file next to the installed package:
+The best way is `/login microsoft-copilot` (see above).
+
+For headless or non-interactive/CI use, set credentials via env or `.env`:
 
 ```dotenv
 MICROSOFT_COPILOT_ACCESS_TOKEN=
@@ -49,9 +74,9 @@ MICROSOFT_COPILOT_TRACE=0
 MICROSOFT_COPILOT_TRACE_FILE=logs/copilot-session.ndjson
 ```
 
-Legacy `COPILOT_*` variable names are still accepted.
+Legacy `COPILOT_*` names are accepted.
 
-Only `MICROSOFT_COPILOT_ACCESS_TOKEN` is required. Cookie-based settings remain optional transport tweaks, not a login method.
+Only the access token is required for auth. Cookies are optional transport enhancements.
 
 ## Behavior
 
@@ -100,3 +125,13 @@ MICROSOFT_COPILOT_TRACE_FILE=logs/copilot-session.ndjson
 ```
 
 Trace output is masked, but you should still treat it as sensitive and keep it out of git.
+
+## Bookmarklet for manual token copy (no Playwright)
+
+If you prefer not to use the automated flow, drag this to your bookmarks bar and click it while on https://copilot.microsoft.com (after signing in and sending a chat message):
+
+```js
+javascript:(function(){try{const u=new URL(location.href);let t=u.searchParams.get('accessToken');if(!t){const m=performance.getEntries().map(e=>e.name).join(' ').match(/accessToken=([^&]+)/);if(m)t=decodeURIComponent(m[1]);} if(!t){for(let k of Object.keys(localStorage)){if(/token|auth/i.test(k)){t=localStorage[k];break;}}} if(t){prompt('Token (copied to clipboard too):',t);navigator.clipboard.writeText(t);}else{alert('Could not auto-detect. Use DevTools Network -> look for accessToken in WS or Authorization header.');}}catch(e){alert('Error: '+e);}})();
+```
+
+(Bookmarklets are one of many options — the playwright flow is strongly preferred.)

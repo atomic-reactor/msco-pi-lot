@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   normalizeAccessToken,
+  extractAccessToken,
   PROVIDER_MODELS,
   promptForAccessToken,
   refreshPastedAccessToken,
@@ -68,5 +69,32 @@ describe("provider", () => {
     expect(normalizeAccessToken("\"abc\"")).toBe("abc");
     expect(normalizeAccessToken("  abc  ")).toBe("abc");
     expect(normalizeAccessToken("  ")).toBe("");
+  });
+
+  test("extractAccessToken handles full URLs, curl, fetch, and json payloads", () => {
+    const token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.XXX.YYY";
+
+    // WS / request URL with query param
+    expect(extractAccessToken(`wss://copilot.microsoft.com/c/api/chat?accessToken=${token}&clientSessionId=foo`)).toBe(token);
+
+    // Full https url
+    expect(extractAccessToken(`https://copilot.microsoft.com/c/api/config?api-version=2&accessToken=${encodeURIComponent(token)}`)).toBe(token);
+
+    // curl with Authorization header
+    expect(extractAccessToken(`curl 'https://copilot.microsoft.com/c/api/conversations' -H 'Authorization: Bearer ${token}' -H 'Origin: ...'`)).toBe(token);
+
+    // fetch snippet
+    expect(extractAccessToken(`fetch("https://copilot.microsoft.com/c/api/chat?accessToken=${token}", {headers:{}})`)).toBe(token);
+
+    // JSON with accessToken
+    expect(extractAccessToken(JSON.stringify({ accessToken: token, foo: 1 }))).toBe(token);
+
+    // Headers block
+    expect(extractAccessToken(`Authorization: Bearer ${token}\nUser-Agent: ...`)).toBe(token);
+  });
+
+  test("extractAccessToken is robust with quotes and extra text", () => {
+    expect(extractAccessToken('"my-token-12345678901234567890"')).toBe("my-token-12345678901234567890");
+    expect(extractAccessToken("   'abcde12345678901234567890'   ")).toBe("abcde12345678901234567890");
   });
 });
