@@ -9,6 +9,7 @@ import type {
 import type { ProviderConfig } from "@mariozechner/pi-coding-agent";
 import type { CopilotMode } from "./types.js";
 import type { CopilotRuntimeManager } from "./runtime/runtime-manager.js";
+import { extractAccessToken } from "./auth/token-capture.js";
 
 export const PROVIDER_NAME = "microsoft-copilot";
 export const COPILOT_API = "microsoft-copilot-chat";
@@ -54,21 +55,9 @@ export function createProviderConfig(runtimeManager: CopilotRuntimeManager): Pro
 }
 
 export async function promptForAccessToken(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
-  const token = normalizeAccessToken(await callbacks.onPrompt({
-    message: "Paste your Microsoft Copilot access token:",
-    placeholder: "Paste access token",
-    allowEmpty: false
-  }));
-
-  if (!token) {
-    throw new Error("A Microsoft Copilot access token is required");
-  }
-
-  return {
-    access: token,
-    refresh: token,
-    expires: Date.now() + NON_REFRESHING_TOKEN_TTL_MS
-  };
+  // Delegate to the rich implementation that supports browser auto-capture + smart paste
+  const mod = await import("./auth/token-capture.js");
+  return mod.loginWithBestEffort(callbacks as any);
 }
 
 export async function refreshPastedAccessToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
@@ -76,7 +65,7 @@ export async function refreshPastedAccessToken(credentials: OAuthCredentials): P
   const refresh = normalizeAccessToken(credentials.refresh || credentials.access);
 
   if (!access) {
-    throw new Error("Microsoft Copilot token is missing. Run /login microsoft-copilot again.");
+    throw new Error("Microsoft Copilot token is missing. Run /login and select Microsoft Copilot (or set MICROSOFT_COPILOT_ACCESS_TOKEN).");
   }
 
   return {
@@ -100,17 +89,9 @@ export function resolveCopilotMode(reasoning: ThinkingLevel | "off" | undefined)
 }
 
 export function normalizeAccessToken(token: string | undefined): string {
-  if (!token) {
-    return "";
-  }
-
-  const trimmed = token.trim();
-  if (!trimmed) {
-    return "";
-  }
-
-  const withoutHeaderName = trimmed.replace(/^authorization\s*:\s*/i, "").trim();
-  const withoutBearer = withoutHeaderName.replace(/^bearer\s+/i, "").trim();
-  const withoutQuotes = withoutBearer.replace(/^['"]|['"]$/g, "").trim();
-  return withoutQuotes;
+  // Powerful extractor handles raw token, Bearer, full URLs with accessToken=, curl, fetch, JSON etc.
+  return extractAccessToken(token);
 }
+
+// Re-export for convenience / tests
+export { extractAccessToken } from "./auth/token-capture.js";

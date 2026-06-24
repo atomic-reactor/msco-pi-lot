@@ -631,7 +631,7 @@ describe("session runtime", () => {
     const event = await stream[Symbol.asyncIterator]().next();
 
     expect(event.value.type).toBe("error");
-    expect(event.value.error.errorMessage).toContain("/login microsoft-copilot");
+    expect(event.value.error.errorMessage).toContain("/login");
   });
 
   test("rotating access tokens resets the persisted conversation and websocket", async () => {
